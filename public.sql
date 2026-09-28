@@ -1,0 +1,16 @@
+public.tipo_consecutivo (
+  empresa TEXT DEFAULT '01'::text NOT NULL,
+  codigo INTEGER STORAGE PLAIN NOT NULL,
+  nombre TEXT,
+  abreviado TEXT NOT NULL,
+  usa_contador BOOLEAN STORAGE PLAIN DEFAULT false,
+  imprimir INTEGER STORAGE PLAIN DEFAULT 0 NOT NULL,
+  activo BOOLEAN STORAGE PLAIN DEFAULT true NOT NULL
+) ;
+
+CREATE TABLE public.consecutivos (
+  empresa TEXT NOT NULL,
+  tipo_consecutivo INTEGER STORAGE PLAIN DEFAULT 0 NOT NULL,
+  id INTEGER STORAGE PLAIN DEFAULT 0 NOT NULL,
+  activo BOOLEAN STORAGE PLAIN DEFAULT true NOT NULL
+) ;

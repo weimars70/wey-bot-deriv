@@ -1,0 +1,57 @@
+// Estilos globales de la app
+
+// Utilidades de color Emerald (Boom / Compras) compatibles con Quasar
+.bg-emerald-1 { background-color: #ecfdf5 !important; }
+.bg-emerald-2 { background-color: #d1fae5 !important; }
+.bg-emerald-5 { background-color: #10b981 !important; }
+.bg-emerald-6 { background-color: #059669 !important; }
+.bg-emerald-7 { background-color: #047857 !important; }
+.bg-emerald-8 { background-color: #065f46 !important; }
+.bg-emerald-9 { background-color: #064e3b !important; }
+.bg-emerald-10 { background-color: #022c22 !important; }
+
+.text-emerald-1 { color: #ecfdf5 !important; }
+.text-emerald-5 { color: #10b981 !important; }
+.text-emerald-7 { color: #047857 !important; }
+.text-emerald-8 { color: #065f46 !important; }
+.text-emerald-9 { color: #064e3b !important; }
+.text-emerald-10 { color: #022c22 !important; }
+
+// Utilidades de Slate (Textos y fondos neutros modernos)
+.bg-slate-50 { background-color: #f8fafc !important; }
+.bg-slate-100 { background-color: #f1f5f9 !important; }
+.bg-slate-200 { background-color: #e2e8f0 !important; }
+.bg-slate-700 { background-color: #334155 !important; }
+.bg-slate-800 { background-color: #1e293b !important; }
+.bg-slate-900 { background-color: #0f172a !important; }
+
+.text-slate-400 { color: #94a3b8 !important; }
+.text-slate-500 { color: #64748b !important; }
+.text-slate-600 { color: #475569 !important; }
+.text-slate-700 { color: #334155 !important; }
+.text-slate-800 { color: #1e293b !important; }
+.text-slate-900 { color: #0f172a !important; }
+
+// Menú flotante del Centro de Alertas y Señales (Campanita)
+.alerts-menu-dropdown {
+  width: 440px;
+  max-width: 95vw;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  background-color: #ffffff;
+  box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.3), 0 4px 6px -2px rgba(15, 23, 42, 0.1);
+
+  // En pantallas móviles ocupa TODO el ancho disponible de la pantalla
+  @media (max-width: 599px) {
+    position: fixed !important;
+    top: 50px !important;
+    left: 4px !important;
+    right: 4px !important;
+    width: calc(100vw - 8px) !important;
+    max-width: calc(100vw - 8px) !important;
+    min-width: calc(100vw - 8px) !important;
+    border-radius: 14px !important;
+    margin: 0 !important;
+  }
+}

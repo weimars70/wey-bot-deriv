@@ -1,0 +1,22 @@
+[Unit]
+Description=MetaTrader 5 terminal for WeyBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mt5bot
+Group=mt5bot
+Environment=HOME=/home/mt5bot
+Environment=XDG_RUNTIME_DIR=/tmp/runtime-mt5bot
+Environment=WINEPREFIX=/home/mt5bot/.mt5
+ExecStartPre=/usr/bin/install -d -o mt5bot -g mt5bot -m 700 /tmp/runtime-mt5bot
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x800x24 -nolisten tcp" /usr/bin/wine /home/mt5bot/.mt5/drive_c/MetaTrader5/terminal64.exe /portable /config:Z:\home\mt5bot\mt5-start.ini
+ExecStop=/usr/bin/wineserver -k
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+

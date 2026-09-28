@@ -1,0 +1,15 @@
+{
+  "appId": "com.weybot.app",
+  "appName": "WeyBot",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_launcher_foreground",
+      "iconColor": "#F5A623",
+      "sound": "default"
+    }
+  }
+}

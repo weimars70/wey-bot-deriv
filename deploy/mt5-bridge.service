@@ -1,0 +1,19 @@
+[Unit]
+Description=WeyBot MT5 file bridge
+After=network-online.target mt5-terminal.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mt5bot
+Group=mt5bot
+WorkingDirectory=/opt/weybot-mt5
+Environment=BOT_SERVER_URL=http://2.58.80.90/bot
+Environment=MT5_FILES_DIR=/home/mt5bot/.mt5/drive_c/MetaTrader5/MQL5/Files
+ExecStart=/usr/bin/node /opt/weybot-mt5/mt5-bridge-client.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

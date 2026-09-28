@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MetaTrader 5
+Comment=Configure the Deriv account and WeyBot EA
+Exec=env WINEPREFIX=/home/mt5bot/.mt5 wine /home/mt5bot/.mt5/drive_c/MetaTrader5/terminal64.exe /portable
+Icon=wine
+Terminal=false
+Categories=Finance;

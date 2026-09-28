@@ -1,0 +1,620 @@
+<template>
+  <q-page class="q-pa-md dashboard-page">
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- ── 1. BOTOLD — Sala de Operaciones (Referencia) ───────────────────── -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <div class="section-header q-mb-md row items-center justify-between">
+      <div class="row items-center q-gutter-sm">
+        <span class="live-pulse-dot apex-pulse" :class="{ active: apexSessionActive }" />
+        <div>
+          <div class="apex-title">
+            🔥 BotOld · Sala de Operaciones
+          </div>
+          <div class="section-sub">
+            Señales BotOld · cuenta 41116831
+            <span v-if="apexLastUpdated" class="q-ml-xs">
+              · actualizado {{ apexTimeAgo }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="row items-center q-gutter-xs">
+        <q-btn
+          flat dense round
+          icon="refresh"
+          color="orange-6"
+          :loading="apexSignals.loading.value"
+          @click="onRefreshApex"
+        >
+          <q-tooltip>Actualizar señales BotOld</q-tooltip>
+        </q-btn>
+        <q-btn
+          flat dense round
+          icon="sync_alt"
+          color="amber-9"
+          :loading="relevoLoading"
+          @click="onForzarRelevo"
+        >
+          <q-tooltip>Reconectar / Forzar relevo de sesión BotOld</q-tooltip>
+        </q-btn>
+      </div>
+    </div>
+
+    <!-- Banner de sesión BotOld inactiva / reconexión -->
+    <div
+      v-if="!apexSessionActive"
+      class="apex-offline-box q-pa-sm q-px-md q-mb-md row items-center justify-between"
+    >
+      <div class="row items-center q-gutter-sm text-amber-9">
+        <q-icon name="wifi_off" size="20px" color="amber-9" />
+        <div>
+          <div class="text-caption text-weight-bold">
+            Sesión BotOld inactiva en este servidor
+          </div>
+          <div class="text-caption text-slate-600" style="font-size: 11px;">
+            {{ apexLastError || 'La cuenta 41116831 requiere inicio de sesión o relevo con la huella registrada.' }}
+          </div>
+        </div>
+      </div>
+      <div class="row items-center q-gutter-xs q-mt-xs-sm">
+        <q-btn
+          unelevated
+          dense
+          size="sm"
+          color="orange-8"
+          icon="sync"
+          label="Conectar / Forzar Relevo"
+          class="q-px-sm"
+          :loading="relevoLoading"
+          @click="onForzarRelevo"
+        >
+          <q-tooltip>Toma el control de la sesión para este servidor</q-tooltip>
+        </q-btn>
+        <q-btn
+          flat
+          dense
+          size="sm"
+          color="slate-700"
+          icon="key"
+          label="Token Manual"
+          @click="showTokenDialog = true"
+        />
+      </div>
+    </div>
+
+    <!-- Diálogo para token manual -->
+    <q-dialog v-model="showTokenDialog">
+      <q-card style="min-width: 360px">
+        <q-card-section>
+          <div class="text-subtitle1 text-weight-bold">Token de Sesión BotOld</div>
+          <div class="text-caption text-slate-500">Pega el token X-Sesion activo de ApexFusion</div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <q-input dense v-model="tokenInput" autofocus placeholder="Ej: e08169c7157d766e6cdff152a2fbaa36..." />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancelar" v-close-popup />
+          <q-btn unelevated color="orange-8" label="Guardar y Validar" @click="onGuardarToken" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Apex loading skeletons -->
+    <div v-if="apexSignals.loading.value" class="row q-col-gutter-md q-mb-xl">
+      <div v-for="i in 4" :key="i" class="col-12 col-sm-6 col-lg-3">
+        <q-skeleton type="rect" height="175px" style="border-radius:12px;" />
+      </div>
+    </div>
+
+    <!-- Apex empty state -->
+    <div
+      v-else-if="!apexList.length"
+      class="empty-box q-pa-lg text-center q-mb-xl"
+    >
+      <q-icon name="signal_wifi_off" size="36px" color="grey-5" />
+      <div class="q-mt-sm text-caption text-slate-500">
+        Sin señales activas de BotOld en este momento (mínimo 3★).
+      </div>
+    </div>
+
+    <!-- Apex signal cards grid -->
+    <div v-else class="row q-col-gutter-md q-mb-xl">
+      <div
+        v-for="(s, i) in apexList"
+        :key="i"
+        class="col-12 col-sm-6 col-lg-3"
+      >
+        <ApexSignalCard :signal="s" />
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- ── 2. WEY TRADING — Sala de Operaciones Local ────────────────────── -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <div class="section-header wey-section-header q-mb-md row items-center justify-between">
+      <div class="row items-center q-gutter-sm">
+        <span class="live-pulse-dot wey-pulse active" />
+        <div>
+          <div class="wey-title row items-center q-gutter-xs">
+            <span>⚡ Wey Trading · Sala de Operaciones</span>
+            <span class="wey-tag">MOTOR LOCAL</span>
+          </div>
+          <div class="section-sub">
+            Contexto de hasta 90 días · 4H, 1H, 30M y 15M · ordenado por estrellas
+            <span v-if="lastWeyUpdate" class="q-ml-xs">
+              · calculado {{ lastWeyUpdateTime }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="row items-center q-gutter-sm">
+        <!-- Reloj anticipado dos minutos antes de cada cuarto de hora -->
+        <div class="evaluation-clock-pill row items-center q-px-sm q-py-xs">
+          <q-icon name="timer" size="14px" class="q-mr-xs text-indigo-7" />
+          <span class="text-caption text-weight-bold text-slate-700">
+            Próxima evaluación: <span class="text-indigo-9 text-weight-bolder">{{ countdownText }}</span> ({{ nextEvaluationTime }})
+          </span>
+          <q-tooltip>Evaluación anticipada a las :13, :28 y :43</q-tooltip>
+        </div>
+
+        <q-toggle
+          v-model="onlyViable"
+          color="positive"
+          dense
+          label="Solo Viables"
+          class="text-caption text-weight-bold text-slate-700"
+        >
+          <q-tooltip>Oculta entradas sin confluencia macro, reacción histórica o enfriamiento suficiente</q-tooltip>
+        </q-toggle>
+
+        <q-toggle
+          v-model="onlyThreeStars"
+          color="indigo-7"
+          dense
+          label="Solo 3★ o más"
+          class="text-caption text-weight-bold text-slate-700"
+        >
+          <q-tooltip>Mostrar solo señales locales con 3 o 4 estrellas</q-tooltip>
+        </q-toggle>
+
+        <q-btn
+          unelevated
+          color="indigo-7"
+          icon="sync"
+          label="Recalcular"
+          dense
+          class="q-px-sm"
+          :loading="weyLoading"
+          @click="loadWeySignals(true)"
+        />
+
+        <q-btn
+          flat
+          dense
+          color="indigo-7"
+          icon="candlestick_chart"
+          label="Estrategia H1 (24h)"
+          to="/h1-strategy"
+        >
+          <q-tooltip>Abrir monitor de velas H1 sin mecha y alertas</q-tooltip>
+        </q-btn>
+
+        <q-btn
+          flat
+          dense
+          color="primary"
+          icon="compare_arrows"
+          label="Comparador Wey vs BotOld"
+          to="/comparison"
+        >
+          <q-tooltip>Abrir comparativa lado a lado</q-tooltip>
+        </q-btn>
+      </div>
+    </div>
+
+    <!-- Wey loading skeletons -->
+    <div v-if="weyLoading && !weySignalsList.length" class="row q-col-gutter-md q-mb-xl">
+      <div v-for="i in 4" :key="i" class="col-12 col-sm-6 col-lg-3">
+        <q-skeleton type="rect" height="175px" style="border-radius:12px;" />
+      </div>
+    </div>
+
+    <!-- Wey empty state -->
+    <div
+      v-else-if="!weySignalsList.length"
+      class="empty-box q-pa-xl text-center q-mb-xl"
+    >
+      <q-icon name="stars" size="44px" color="amber-7" />
+      <div class="text-subtitle1 text-weight-bold text-slate-800 q-mt-sm">
+        No hay señales Wey viables en este momento
+      </div>
+      <div class="text-caption text-slate-500 q-mt-xs">
+        El motor Wey verifica tendencia macro M15 (EMA 50), estructura y enfriamiento de spikes. Las entradas no viables se ocultan para proteger tu capital.
+      </div>
+      <div class="row items-center justify-center q-gutter-sm q-mt-md">
+        <q-btn
+          v-if="onlyViable"
+          outline
+          dense
+          color="primary"
+          label="Ver todas (incluyendo no viables)"
+          class="q-px-sm text-weight-bold"
+          @click="onlyViable = false"
+        />
+        <q-btn
+          v-if="onlyThreeStars"
+          flat
+          dense
+          color="slate-700"
+          label="Mostrar también 1★ y 2★"
+          class="q-px-sm text-weight-bold"
+          @click="onlyThreeStars = false"
+        />
+      </div>
+    </div>
+
+    <!-- Wey Signal Cards Grid (identicas a Apex, ordenadas por estrellas desc) -->
+    <div v-else class="row q-col-gutter-md q-mb-xl">
+      <div
+        v-for="s in weySignalsList"
+        :key="s.symbol"
+        class="col-12 col-sm-6 col-lg-3"
+      >
+        <WeySignalCard :signal="s" />
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- ── 3. RESUMEN COMPARATIVO: WEY VS BOTOLD ────────────────────────── -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <div class="comparison-summary-header q-mb-md row items-center justify-between">
+      <div class="row items-center q-gutter-xs">
+        <q-icon name="analytics" size="20px" color="slate-700" />
+        <span class="text-subtitle2 text-weight-bold text-slate-800">
+          Resumen de Coincidencia: Wey (Local) vs BotOld
+        </span>
+      </div>
+      <div class="text-caption text-slate-500">
+        {{ weySignalsList.length }} señales locales activas ({{ onlyThreeStars ? '≥3★' : 'todas' }}, {{ onlyViable ? 'solo viables' : 'todas' }})
+      </div>
+    </div>
+
+    <div class="row q-col-gutter-md q-mb-lg">
+      <div class="col-12 col-sm-6 col-md-3">
+        <div class="kpi-box">
+          <div class="kpi-num text-primary">{{ compSummary.total || 0 }}</div>
+          <div class="kpi-lbl">Índices Evaluados</div>
+        </div>
+      </div>
+      <div class="col-12 col-sm-6 col-md-3">
+        <div class="kpi-box">
+          <div class="kpi-num text-purple-8">{{ compSummary.withApex || 0 }}</div>
+          <div class="kpi-lbl">Con Señal en BotOld</div>
+        </div>
+      </div>
+      <div class="col-12 col-sm-6 col-md-3">
+        <div class="kpi-box">
+          <div class="kpi-num text-green-7">{{ compSummary.directionMatches || 0 }}</div>
+          <div class="kpi-lbl">Dirección Coincidente</div>
+        </div>
+      </div>
+      <div class="col-12 col-sm-6 col-md-3">
+        <div class="kpi-box">
+          <div class="kpi-num text-amber-8">{{ compSummary.viableCount ?? 0 }}</div>
+          <div class="kpi-lbl">Señales Viables Hoy</div>
+        </div>
+      </div>
+    </div>
+
+  </q-page>
+</template>
+
+<script setup>
+import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { useQuasar } from 'quasar';
+import { usePolling } from 'src/composables/usePolling';
+import { apexSignalsService } from 'src/services/apexSignals.service';
+import { weySignalsService } from 'src/services/weySignals.service';
+import ApexSignalCard from 'src/components/ApexSignalCard.vue';
+import WeySignalCard from 'src/components/WeySignalCard.vue';
+
+const $q = useQuasar();
+
+// ── 1. ApexFusion polling (cada 5 min) ───────────────────────────────────────
+const apexSignals = usePolling(() => apexSignalsService.getSignals(), 5 * 60_000);
+
+const apexList = computed(() => {
+  const data = apexSignals.data.value;
+  if (!data || !Array.isArray(data.signals)) return [];
+  // Solo señales con 3 o más estrellas ordenadas por estrellas desc
+  return data.signals
+    .filter((s) => (s.estrellas ?? 0) >= 3)
+    .sort((a, b) => (b.estrellas ?? 0) - (a.estrellas ?? 0) || (b.rb ?? 0) - (a.rb ?? 0));
+});
+
+const apexLastUpdated   = computed(() => apexSignals.data.value?.lastUpdated ?? null);
+const apexSessionActive = computed(() => apexSignals.data.value?.sessionActive ?? false);
+const apexLastError     = computed(() => apexSignals.data.value?.lastError ?? null);
+const relevoLoading     = ref(false);
+const tokenInput        = ref('');
+const showTokenDialog   = ref(false);
+
+async function onForzarRelevo() {
+  relevoLoading.value = true;
+  try {
+    const res = await apexSignalsService.login(true, '41116831');
+    if (res?.ok) {
+      $q.notify({ type: 'positive', message: 'Sesión BotOld conectada con éxito' });
+      await apexSignals.refresh();
+      await loadWeySignals(true);
+    } else {
+      $q.notify({ type: 'negative', message: res?.message || 'Error al conectar con ApexFusion' });
+    }
+  } catch (err) {
+    $q.notify({ type: 'negative', message: err?.message || 'Error de conexión' });
+  } finally {
+    relevoLoading.value = false;
+  }
+}
+
+async function onGuardarToken() {
+  if (!tokenInput.value) return;
+  try {
+    const res = await apexSignalsService.setSession(tokenInput.value.trim());
+    if (res?.ok) {
+      $q.notify({ type: 'positive', message: 'Token guardado y validado correctamente' });
+      showTokenDialog.value = false;
+      await apexSignals.refresh();
+      await loadWeySignals(true);
+    } else {
+      $q.notify({ type: 'negative', message: res?.message || 'Token rechazado por ApexFusion' });
+    }
+  } catch (err) {
+    $q.notify({ type: 'negative', message: err?.message || 'Error al guardar token' });
+  }
+}
+
+const apexTimeAgo = computed(() => {
+  const ts = apexLastUpdated.value;
+  if (!ts) return '';
+  const diff = Date.now() - new Date(ts).getTime();
+  const sec  = Math.floor(diff / 1000);
+  if (sec < 60)  return `hace ${sec}s`;
+  return `hace ${Math.floor(sec / 60)}m`;
+});
+
+function onRefreshApex() {
+  apexSignals.refresh();
+}
+
+// ── 2. Wey Signals (Motor Local) ────────────────────────────────────────────
+const weyLoading        = ref(false);
+const rawWeySignals     = ref([]);
+const compSummary       = ref({ total: 0, withApex: 0, directionMatches: 0, strongMatches: 0, viableCount: 0 });
+const lastWeyUpdate     = ref(null);
+const onlyThreeStars    = ref(true);
+const onlyViable        = ref(true);
+const countdownText     = ref('00:00');
+const nextEvaluationTime = ref('');
+let countdownTimer       = null;
+let lastScheduledEvaluationKey = null;
+
+const lastWeyUpdateTime = computed(() => {
+  if (!lastWeyUpdate.value) return '';
+  return new Date(lastWeyUpdate.value).toLocaleTimeString();
+});
+
+function updateCountdown() {
+  const now = new Date();
+  const evaluationMinutes = [13, 28, 43];
+  const minutes = now.getMinutes();
+
+  if (evaluationMinutes.includes(minutes) && now.getSeconds() <= 1) {
+    const evaluationKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${minutes}`;
+    if (lastScheduledEvaluationKey !== evaluationKey) {
+      lastScheduledEvaluationKey = evaluationKey;
+      loadWeySignals(true);
+    }
+  }
+
+  const nextTargetMinute = evaluationMinutes.find((minute) => minute > minutes);
+  const targetDate = new Date(now);
+  if (nextTargetMinute === undefined) {
+    targetDate.setHours(now.getHours() + 1, evaluationMinutes[0], 0, 0);
+  } else {
+    targetDate.setMinutes(nextTargetMinute, 0, 0);
+  }
+
+  const diffMs = targetDate.getTime() - now.getTime();
+  const totalSec = Math.floor(diffMs / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  countdownText.value = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  nextEvaluationTime.value = targetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Señales locales Wey ordenadas por estrellas de mayor a menor (4★ → 3★)
+const weySignalsList = computed(() => {
+  let list = rawWeySignals.value;
+  if (onlyViable.value) {
+    list = list.filter((s) => s.viable);
+  }
+  if (onlyThreeStars.value) {
+    list = list.filter((s) => (s.estrellas ?? 0) >= 3);
+  }
+  return [...list].sort((a, b) => {
+    // Ordenar de mayor a menor estrellas
+    if ((b.estrellas ?? 0) !== (a.estrellas ?? 0)) {
+      return (b.estrellas ?? 0) - (a.estrellas ?? 0);
+    }
+    // Si empatan, mayor R:B
+    if ((b.rb ?? 0) !== (a.rb ?? 0)) {
+      return (b.rb ?? 0) - (a.rb ?? 0);
+    }
+    return a.mercado.localeCompare(b.mercado);
+  });
+});
+
+async function loadWeySignals(force = false) {
+  weyLoading.value = true;
+  try {
+    const res = await weySignalsService.getComparison(force);
+    if (res && res.rows) {
+      rawWeySignals.value = res.rows
+        .map((r) => r.wey)
+        .filter((w) => w !== null);
+      compSummary.value   = res.summary || {};
+      lastWeyUpdate.value = res.summary?.computedAt || new Date().toISOString();
+    }
+  } catch (err) {
+    console.error('Error al cargar señales Wey:', err);
+  } finally {
+    weyLoading.value = false;
+  }
+}
+
+onMounted(() => {
+  loadWeySignals();
+  updateCountdown();
+  countdownTimer = setInterval(updateCountdown, 1000);
+});
+
+onUnmounted(() => {
+  if (countdownTimer) clearInterval(countdownTimer);
+});
+</script>
+
+<style scoped>
+.dashboard-page {
+  background-color: #f8fafc;
+  min-height: 100vh;
+}
+
+.text-slate-900 { color: #0f172a; }
+.text-slate-800 { color: #1e293b; }
+.text-slate-700 { color: #334155; }
+.text-slate-500 { color: #64748b; }
+.text-slate-400 { color: #94a3b8; }
+
+/* ── Section Headers ─────────────────────────────────────────────────────── */
+.section-header {
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 12px;
+}
+
+.wey-section-header {
+  border-top:    1px solid #e2e8f0;
+  padding-top:   24px;
+}
+
+.comparison-summary-header {
+  border-top:    1px solid #e2e8f0;
+  padding-top:   20px;
+}
+
+.apex-title {
+  font-size:      17px;
+  font-weight:    800;
+  color:          #d97706;
+  letter-spacing: 0.3px;
+}
+
+.wey-title {
+  font-size:      17px;
+  font-weight:    800;
+  color:          #4338ca;
+  letter-spacing: 0.3px;
+}
+
+.wey-tag {
+  font-size:      9px;
+  font-weight:    800;
+  background:     #e0e7ff;
+  color:          #4338ca;
+  padding:        2px 6px;
+  border-radius:  4px;
+  letter-spacing: 0.8px;
+}
+
+.section-sub {
+  font-size:  11px;
+  color:      #64748b;
+  margin-top: 2px;
+}
+
+/* ── Live Pulse Dots ─────────────────────────────────────────────────────── */
+.live-pulse-dot {
+  display:       inline-block;
+  width:         8px;
+  height:        8px;
+  border-radius: 50%;
+  background:    #cbd5e1;
+  flex-shrink:   0;
+  transition:    background 0.3s;
+}
+
+.apex-pulse.active {
+  background: #f59e0b;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6);
+  animation:  apex-pulse-anim 2s ease-in-out infinite;
+}
+
+.wey-pulse.active {
+  background: #6366f1;
+  box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6);
+  animation:  wey-pulse-anim 2s ease-in-out infinite;
+}
+
+@keyframes apex-pulse-anim {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
+  70%  { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+@keyframes wey-pulse-anim {
+  0%   { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7); }
+  70%  { box-shadow: 0 0 0 7px rgba(99, 102, 241, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+}
+
+.empty-box {
+  background:    #ffffff;
+  border:        1px dashed #e2e8f0;
+  border-radius: 12px;
+}
+
+.kpi-box {
+  background:    #ffffff;
+  border:        1px solid #e2e8f0;
+  border-radius: 10px;
+  padding:       12px 16px;
+  text-align:    center;
+}
+
+.kpi-num {
+  font-size:   24px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.kpi-lbl {
+  font-size:  11px;
+  color:      #64748b;
+  margin-top: 2px;
+}
+
+.evaluation-clock-pill {
+  background: #ede9fe;
+  border: 1px solid #c4b5fd;
+  border-radius: 8px;
+}
+
+.apex-offline-box {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+}
+</style>

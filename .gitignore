@@ -1,0 +1,48 @@
+# ─── Dependencias (Frontend y Backend) ───
+node_modules/
+**/node_modules/
+frontend/node_modules/
+backend/node_modules/
+.pnp
+.pnp.js
+
+# ─── Carpetas de compilación / Build ───
+dist/
+**/dist/
+frontend/dist/
+backend/dist/
+.quasar/
+**/.quasar/
+src-capacitor/www/
+**/src-capacitor/www/
+src-cordova/www/
+**/src-cordova/www/
+
+# ─── Archivos de Entorno y Secretos (Seguridad) ───
+.env
+.env.*
+!.env.example
+*.env
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+backend/.apex-session.json
+
+# ─── Logs ───
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── Archivos temporales y del sistema operativo ───
+tmp/
+temp/
+.temp/
+.cache/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

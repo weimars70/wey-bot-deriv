@@ -1,0 +1,111 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="100%" stop-color="#101a2a"/>
+    </linearGradient>
+    <linearGradient id="crash" x1="0" x2="1">
+      <stop offset="0%" stop-color="#ff6b6b"/>
+      <stop offset="100%" stop-color="#ff3b30"/>
+    </linearGradient>
+    <linearGradient id="boom" x1="0" x2="1">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+
+  <text x="800" y="70" text-anchor="middle" font-size="42" font-weight="700" fill="#e5eefc" font-family="Arial, sans-serif">ESTRATEGIA M5+</text>
+  <text x="800" y="106" text-anchor="middle" font-size="20" fill="#9bbce6" font-family="Arial, sans-serif">Doji/Pin Bar + vela de señal + spike esperado en 1–6 velas M5</text>
+
+  <g filter="url(#shadow)">
+    <rect x="60" y="150" width="700" height="290" rx="26" fill="#132338" stroke="#2f4d77"/>
+    <rect x="840" y="150" width="700" height="290" rx="26" fill="#132338" stroke="#2f4d77"/>
+  </g>
+
+  <text x="410" y="188" text-anchor="middle" font-size="30" font-weight="700" fill="#ff9aa2" font-family="Arial, sans-serif">CRASH SELL</text>
+  <text x="1210" y="188" text-anchor="middle" font-size="30" font-weight="700" fill="#93f0c1" font-family="Arial, sans-serif">BOOM BUY</text>
+
+  <!-- CRASH SECTION -->
+  <g>
+    <text x="120" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 1 - Doji / Pin Bar</text>
+    <line x1="150" y1="315" x2="150" y2="250" stroke="#f7f7f7" stroke-width="4"/>
+    <line x1="150" y1="315" x2="150" y2="360" stroke="#f7f7f7" stroke-width="4"/>
+    <rect x="120" y="290" width="60" height="40" fill="#f3f4f6" stroke="#bfc7d9" stroke-width="2"/>
+    <line x1="120" y1="290" x2="120" y2="250" stroke="#e2e8f0" stroke-width="5"/>
+    <line x1="180" y1="290" x2="180" y2="360" stroke="#e2e8f0" stroke-width="5"/>
+    <text x="170" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">cuerpo pequeño</text>
+    <text x="162" y="440" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">mechas largas</text>
+
+    <text x="260" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 2 - Vela señal</text>
+    <line x1="330" y1="330" x2="330" y2="260" stroke="#2dd4bf" stroke-width="8"/>
+    <rect x="290" y="264" width="80" height="66" fill="#34d399" stroke="#7ef7ca" stroke-width="2"/>
+    <text x="330" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">bullish / alcista</text>
+
+    <text x="470" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 3 - Entrada</text>
+    <line x1="510" y1="330" x2="510" y2="260" stroke="#fbbf24" stroke-width="6"/>
+    <circle cx="510" cy="295" r="16" fill="#fbbf24"/>
+    <text x="495" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">cierre de la vela señal</text>
+
+    <text x="600" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 4 - Spike</text>
+    <line x1="610" y1="250" x2="610" y2="360" stroke="#f87171" stroke-width="5"/>
+    <rect x="585" y="270" width="50" height="90" fill="url(#crash)" rx="8"/>
+    <text x="615" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">baja fuerte en 1–6 M5</text>
+
+    <line x1="420" y1="335" x2="560" y2="335" stroke="#7dd3fc" stroke-width="3" stroke-dasharray="10 8"/>
+    <line x1="560" y1="335" x2="620" y2="335" stroke="#7dd3fc" stroke-width="3" stroke-dasharray="10 8"/>
+
+    <rect x="110" y="470" width="590" height="110" rx="16" fill="#0d1f2f" stroke="#355882"/>
+    <text x="130" y="510" font-size="24" font-weight="700" fill="#ffb4b4" font-family="Arial, sans-serif">Regla CRASH</text>
+    <text x="130" y="548" font-size="20" fill="#e5eefc" font-family="Arial, sans-serif">Doji + vela alcista grande → venta corta</text>
+    <text x="130" y="575" font-size="20" fill="#e5eefc" font-family="Arial, sans-serif">SL por encima del máximo del doji + buffer</text>
+  </g>
+
+  <!-- BOOM SECTION -->
+  <g>
+    <text x="930" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 1 - Doji / Pin Bar</text>
+    <line x1="960" y1="315" x2="960" y2="250" stroke="#f7f7f7" stroke-width="4"/>
+    <line x1="960" y1="315" x2="960" y2="360" stroke="#f7f7f7" stroke-width="4"/>
+    <rect x="930" y="290" width="60" height="40" fill="#f3f4f6" stroke="#bfc7d9" stroke-width="2"/>
+    <line x1="930" y1="290" x2="930" y2="250" stroke="#e2e8f0" stroke-width="5"/>
+    <line x1="990" y1="290" x2="990" y2="360" stroke="#e2e8f0" stroke-width="5"/>
+    <text x="1000" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">cuerpo pequeño</text>
+    <text x="992" y="440" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">mechas largas</text>
+
+    <text x="1060" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 2 - Vela señal</text>
+    <line x1="1140" y1="330" x2="1140" y2="260" stroke="#f87171" stroke-width="8"/>
+    <rect x="1100" y="264" width="80" height="66" fill="#f87171" stroke="#fecaca" stroke-width="2"/>
+    <text x="1140" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">bearish / bajista</text>
+
+    <text x="1260" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 3 - Entrada</text>
+    <line x1="1310" y1="330" x2="1310" y2="260" stroke="#fbbf24" stroke-width="6"/>
+    <circle cx="1310" cy="295" r="16" fill="#fbbf24"/>
+    <text x="1295" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">cierre de la vela señal</text>
+
+    <text x="1450" y="245" font-size="18" fill="#dfe9ff" font-family="Arial, sans-serif">Paso 4 - Spike</text>
+    <line x1="1460" y1="250" x2="1460" y2="360" stroke="#4ade80" stroke-width="5"/>
+    <rect x="1435" y="270" width="50" height="90" fill="url(#boom)" rx="8"/>
+    <text x="1470" y="420" font-size="16" fill="#dfe9ff" font-family="Arial, sans-serif">sube fuerte en 1–6 M5</text>
+
+    <line x1="1185" y1="335" x2="1295" y2="335" stroke="#7dd3fc" stroke-width="3" stroke-dasharray="10 8"/>
+    <line x1="1295" y1="335" x2="1395" y2="335" stroke="#7dd3fc" stroke-width="3" stroke-dasharray="10 8"/>
+
+    <rect x="900" y="470" width="590" height="110" rx="16" fill="#0d1f2f" stroke="#355882"/>
+    <text x="920" y="510" font-size="24" font-weight="700" fill="#a7f3d0" font-family="Arial, sans-serif">Regla BOOM</text>
+    <text x="920" y="548" font-size="20" fill="#e5eefc" font-family="Arial, sans-serif">Doji + vela bajista grande → compra larga</text>
+    <text x="920" y="575" font-size="20" fill="#e5eefc" font-family="Arial, sans-serif">SL por debajo del mínimo del doji - buffer</text>
+  </g>
+
+  <!-- Bottom summary -->
+  <g>
+    <rect x="180" y="650" width="1240" height="170" rx="20" fill="#101b2e" stroke="#2e4d73"/>
+    <text x="250" y="700" font-size="26" font-weight="700" fill="#e6f0ff" font-family="Arial, sans-serif">Qué es M5+ en resumen</text>
+    <text x="250" y="740" font-size="20" fill="#d9e8ff" font-family="Arial, sans-serif">• El patrón empieza con un doji o pin bar con mechas largas y cuerpo pequeño.</text>
+    <text x="250" y="770" font-size="20" fill="#d9e8ff" font-family="Arial, sans-serif">• La vela siguiente confirma la dirección y se entra al cierre de esa vela.</text>
+    <text x="250" y="800" font-size="20" fill="#d9e8ff" font-family="Arial, sans-serif">• El objetivo es un spike fuerte en las siguientes 1–6 velas M5, con stop loss fuera del doji.</text>
+  </g>
+</svg>

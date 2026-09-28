@@ -1,0 +1,4 @@
+# Reglas de permisos para Antigravity
+auto_approve_read: true
+require_confirmation_for_write: true
+require_confirmation_for_terminal: true

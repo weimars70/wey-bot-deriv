@@ -1,0 +1,127 @@
+name: Compilar APK Android (WeyBot)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Generar WeyBot.apk
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Configurar Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias del frontend
+        run: |
+          cd frontend
+          npm install
+
+      - name: Instalar dependencias de Capacitor
+        run: |
+          cd frontend/src-capacitor
+          npm install
+
+      - name: Compilar interfaz web con Quasar (Capacitor)
+        run: |
+          cd frontend
+          npx quasar build -m capacitor -T android --skip-pkg
+
+      - name: Sincronizar plataforma Android
+        run: |
+          cd frontend/src-capacitor
+          npx cap sync android
+
+      - name: Aplicar iconos WeyBot (sobreescribir defaults de Quasar)
+        run: |
+          cd frontend
+          node generate-icons.mjs || echo "Iconos pregenerados ya presentes en res/mipmap"
+
+      - name: Dar permisos de ejecución a gradlew
+        run: chmod +x frontend/src-capacitor/android/gradlew
+
+      - name: Asegurar Keystore permanente para firma oficial de Release
+        run: |
+          cd frontend/src-capacitor/android/app
+          if [ ! -f weybot.keystore ]; then
+            echo "Generando weybot.keystore permanente..."
+            keytool -genkeypair -v \
+              -keystore weybot.keystore \
+              -alias weybot \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass weybot2026 \
+              -keypass weybot2026 \
+              -dname "CN=WeyBot, OU=Trading, O=WeyBot, L=Bogota, ST=Cundinamarca, C=CO"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add weybot.keystore
+            git commit -m "chore: persistir keystore permanente oficial de WeyBot [skip ci]" || true
+            git push origin main || true
+          fi
+
+      - name: Compilar APK de Producción (assembleRelease)
+        run: |
+          cd frontend/src-capacitor/android
+          ./gradlew assembleRelease --no-daemon || ./gradlew assembleDebug --no-daemon
+
+      - name: Copiar y renombrar APK
+        run: |
+          if [ -f frontend/src-capacitor/android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp frontend/src-capacitor/android/app/build/outputs/apk/release/app-release.apk WeyBot.apk
+          elif [ -f frontend/src-capacitor/android/app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            cp frontend/src-capacitor/android/app/build/outputs/apk/release/app-release-unsigned.apk WeyBot.apk
+          else
+            cp frontend/src-capacitor/android/app/build/outputs/apk/debug/app-debug.apk WeyBot.apk
+          fi
+
+      - name: Subir APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeyBot-Android-APK
+          path: WeyBot.apk
+          retention-days: 30
+
+      - name: Generar tag dinámico
+        id: tag
+        run: echo "TAG=v$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Publicar Release en GitHub con APK
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: ${{ steps.tag.outputs.TAG }}
+          name: "WeyBot ${{ steps.tag.outputs.TAG }} (APK Android)"
+          body: |
+            ### 📱 WeyBot APK Nativo para Android
+            Descarga e instala el archivo **WeyBot.apk** adjunto directamente en tu móvil Android.
+
+            - **Aplicación:** WeyBot
+            - **Paquete:** `com.weybot.app`
+            - **Audio:** Sonidos automáticos desbloqueados sin restricción de navegador
+            - **Conexión:** Sincronizado en tiempo real con el servidor `http://2.58.80.90/bot/`
+            - **MetaTrader 5:** Enlace y radar de operaciones en vivo
+          files: WeyBot.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
