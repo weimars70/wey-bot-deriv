@@ -134,7 +134,22 @@
     </div>
 
     <!-- Contenedor del gráfico Lightweight Charts -->
-    <div ref="chartContainer" class="chart-canvas-container" @dblclick="resetView"></div>
+    <div class="chart-canvas-shell" @dblclick="resetView">
+      <div ref="chartContainer" class="chart-canvas-container"></div>
+      <div
+        v-if="obOriginStyle"
+        class="ob-origin-marker"
+        :class="{ 'ob-origin-marker--boom': isBoom }"
+        :style="obOriginStyle"
+        aria-hidden="true"
+      >
+        <span class="ob-origin-marker__band"></span>
+        <span class="ob-origin-marker__line"></span>
+        <span class="ob-origin-marker__label">
+          {{ isBoom ? 'Origen OB BUY' : 'Origen OB SELL' }}
+        </span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -173,11 +188,13 @@ const isBoom = computed(() => {
 });
 
 const chartContainer    = ref(null);
+const obOriginStyle     = ref(null);
 const showLabels        = ref(false); // Por defecto desactivado para que NUNCA tape las velas
 let chart               = null;
 let candleSeries        = null;
 let priceLines          = [];
 let resizeObserver      = null;
+let visibleRangeHandler = null;
 let isFirstLoad         = true;
 let lastRenderedSymbol  = '';
 
@@ -225,20 +242,56 @@ function zoomOut() {
   } catch (e) {}
 }
 
+function getTimeframeSeconds() {
+  const tf = Number(props.timeframe);
+  return Number.isFinite(tf) && tf > 0 ? tf * 60 : 300;
+}
+
 function findMatchingCandleTime(targetEpoch) {
-  if (!targetEpoch || !props.candles.length) return null;
-  const exact = props.candles.find((c) => Number(c.time) === targetEpoch);
+  const target = Number(targetEpoch);
+  if (!target || !props.candles.length) return null;
+  const exact = props.candles.find((c) => Number(c.time) === target);
   if (exact) return Number(exact.time);
 
   const sorted = [...props.candles].sort((a, b) => Number(a.time) - Number(b.time));
   for (let i = 0; i < sorted.length; i++) {
     const curTime = Number(sorted[i].time);
-    const nextTime = i < sorted.length - 1 ? Number(sorted[i + 1].time) : curTime + 300;
-    if (targetEpoch >= curTime && targetEpoch < nextTime) {
+    const nextTime = i < sorted.length - 1 ? Number(sorted[i + 1].time) : curTime + getTimeframeSeconds();
+    if (target >= curTime && target < nextTime) {
       return curTime;
     }
   }
   return null;
+}
+
+function updateObOriginMarker() {
+  obOriginStyle.value = null;
+  if (!chart || !chartContainer.value || !props.obEpoch || !props.candles.length) return;
+
+  const matchTime = findMatchingCandleTime(props.obEpoch);
+  if (!matchTime) return;
+
+  let x = null;
+  try {
+    x = chart.timeScale().timeToCoordinate(matchTime);
+  } catch (e) {
+    return;
+  }
+
+  const coordinate = Number(x);
+  if (!Number.isFinite(coordinate)) return;
+
+  const width = chartContainer.value.clientWidth || 0;
+  if (coordinate < -28 || (width > 0 && coordinate > width + 28)) return;
+
+  const barSpacing = Number(chart.timeScale().options().barSpacing || 9);
+  const bandWidth = Math.max(8, Math.min(26, barSpacing * 1.8));
+  obOriginStyle.value = {
+    left: `${coordinate.toFixed(1)}px`,
+    '--ob-origin-color': isBoom.value ? '#059669' : '#f59e0b',
+    '--ob-origin-bg': isBoom.value ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.13)',
+    '--ob-origin-width': `${bandWidth.toFixed(1)}px`,
+  };
 }
 
 function updateMarkers() {
@@ -253,7 +306,7 @@ function updateMarkers() {
           position: 'belowBar',
           color: '#10b981',
           shape: 'arrowUp',
-          text: `📍 VELA OB BUY (${formatNum(props.obMid50)})`,
+          text: `VELA ORIGEN OB BUY (${formatNum(props.obMid50)})`,
           size: 2,
         });
       } else {
@@ -262,7 +315,7 @@ function updateMarkers() {
           position: 'aboveBar',
           color: '#f59e0b',
           shape: 'arrowDown',
-          text: `📍 VELA OB SELL (${formatNum(props.obMid50)})`,
+          text: `VELA ORIGEN OB SELL (${formatNum(props.obMid50)})`,
           size: 2,
         });
       }
@@ -290,6 +343,7 @@ function updateMarkers() {
   } catch (e) {
     console.warn('Error setting chart markers:', e);
   }
+  updateObOriginMarker();
 }
 
 function goToObCandle(targetEpoch = null) {
@@ -307,6 +361,7 @@ function goToObCandle(targetEpoch = null) {
         from: Math.max(0, idx - 15),
         to: Math.min(sorted.length - 1 + 8, idx + 15),
       });
+      setTimeout(updateObOriginMarker, 0);
     } catch (e) {}
   }
 }
@@ -418,6 +473,7 @@ function updateChartData(forceFit = false) {
 
   if (!props.candles || props.candles.length === 0) {
     clearPriceLines();
+    obOriginStyle.value = null;
     try {
       candleSeries.setData([]);
     } catch (e) {}
@@ -460,7 +516,10 @@ function updateChartData(forceFit = false) {
     }
   }
 
-  if (unique.length === 0) return;
+  if (unique.length === 0) {
+    obOriginStyle.value = null;
+    return;
+  }
 
   // 3. Forzar autoScale en la escala vertical de precios
   if (isSymbolChange || forceFit || isFirstLoad) {
@@ -480,6 +539,7 @@ function updateChartData(forceFit = false) {
   // 5. Crear las líneas de precio y marcadores
   updatePriceLines();
   updateMarkers();
+  updateObOriginMarker();
 
   // 6. Si cambió de activo, o es primera carga o forceFit: ajustar vista completa
   if (isSymbolChange || forceFit || isFirstLoad) {
@@ -531,6 +591,9 @@ onMounted(() => {
       },
     });
 
+    visibleRangeHandler = () => updateObOriginMarker();
+    chart.timeScale().subscribeVisibleLogicalRangeChange(visibleRangeHandler);
+
     candleSeries = chart.addCandlestickSeries({
       upColor: '#10b981',
       downColor: '#ef4444',
@@ -548,6 +611,7 @@ onMounted(() => {
       const { width } = entries[0].contentRect;
       if (width > 50) {
         chart.applyOptions({ width });
+        updateObOriginMarker();
         if (isFirstLoad) {
           try {
             chart.priceScale('right').applyOptions({ autoScale: true });
@@ -566,6 +630,12 @@ onUnmounted(() => {
     resizeObserver = null;
   }
   if (chart) {
+    if (visibleRangeHandler) {
+      try {
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(visibleRangeHandler);
+      } catch (e) {}
+      visibleRangeHandler = null;
+    }
     chart.remove();
     chart = null;
   }
@@ -586,6 +656,7 @@ watch(
   () => {
     isFirstLoad = true;
     clearPriceLines();
+    obOriginStyle.value = null;
     if (chart) {
       try {
         chart.priceScale('right').applyOptions({ autoScale: true });
@@ -612,6 +683,7 @@ watch(
   () => {
     updatePriceLines();
     updateMarkers();
+    updateObOriginMarker();
   }
 );
 
@@ -619,6 +691,7 @@ watch(
   () => props.obEpoch,
   () => {
     updateMarkers();
+    updateObOriginMarker();
   }
 );
 
@@ -627,6 +700,7 @@ watch(
   () => {
     updatePriceLines();
     updateMarkers();
+    updateObOriginMarker();
   },
   { deep: true }
 );
@@ -660,8 +734,64 @@ watch(
   display: inline-block;
 }
 
-.chart-canvas-container {
+.chart-canvas-shell {
+  position: relative;
   width: 100%;
   height: 520px;
+}
+
+.chart-canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+.ob-origin-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 8;
+  width: 0;
+  pointer-events: none;
+}
+
+.ob-origin-marker__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--ob-origin-width) / -2);
+  width: var(--ob-origin-width);
+  background: var(--ob-origin-bg);
+  border-left: 1px solid rgba(255, 255, 255, 0.65);
+  border-right: 1px solid rgba(255, 255, 255, 0.65);
+}
+
+.ob-origin-marker__line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1px;
+  border-left: 2px dashed var(--ob-origin-color);
+  opacity: 0.95;
+}
+
+.ob-origin-marker__label {
+  position: absolute;
+  top: 18px;
+  left: 8px;
+  white-space: nowrap;
+  border-radius: 6px;
+  background: var(--ob-origin-color);
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 5px 7px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+}
+
+.ob-origin-marker--boom .ob-origin-marker__label {
+  top: auto;
+  bottom: 18px;
 }
 </style>

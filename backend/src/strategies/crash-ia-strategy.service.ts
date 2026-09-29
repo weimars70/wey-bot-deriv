@@ -134,11 +134,13 @@ export class CrashIaStrategyService {
     const mercado = allDefs.find((s) => s.symbol === sym)?.name || sym;
 
     // 1. Obtener velas H1 (3600), M5 (300), M15 (900) y M1 (60)
+    const m5HistoryCount = 288; // ~24 horas de M5
+    const m1HistoryCount = 500; // cubre los OB M5 buscados hasta ~6h40 atras
     const [h1Raw, m5Raw, m15Raw, m1Raw] = await Promise.all([
       this.candlesService.findLatest(sym, 3600, 100),
-      this.candlesService.findLatest(sym, 300, 288), // ~24 horas de M5
+      this.candlesService.findLatest(sym, 300, m5HistoryCount), // ~24 horas de M5
       this.candlesService.findLatest(sym, 900, 100),
-      this.candlesService.findLatest(sym, 60, 120),  // últimas 2 horas de M1
+      this.candlesService.findLatest(sym, 60, m1HistoryCount),  // ultimas ~8h20 de M1
     ]);
 
     const h1Candles = [...h1Raw].sort((a, b) => Number(a.epoch) - Number(b.epoch));
@@ -983,13 +985,14 @@ export class CrashIaStrategyService {
    */
   private getMinSpikeDropForOB(symbol: string): number {
     const up = (symbol || '').toUpperCase();
+    // Check longer names first because "CRASH1000" also contains "100".
+    if (up.includes('1000')) return 10.0;
     if (up.includes('100')) return 3.0;
     if (up.includes('200')) return 3.5;
     if (up.includes('300')) return 4.0;
     if (up.includes('500')) return 6.0;
     if (up.includes('600')) return 8.0;
     if (up.includes('900')) return 10.0;
-    if (up.includes('1000')) return 10.0;
     return 6.0;
   }
 
@@ -1006,80 +1009,117 @@ export class CrashIaStrategyService {
     symbol: string,
     isBoom: boolean,
   ): { active: OrderBlockPoint | null; list: OrderBlockPoint[] } {
-    if (!m5Candles || m5Candles.length < 5) return { active: null, list: [] };
+    if (!m5Candles || m5Candles.length < 6) return { active: null, list: [] };
 
     const minDrop = this.getMinSpikeDropForOB(symbol);
     const list: OrderBlockPoint[] = [];
+    const structureLookback = 8;
+    const impulseWindow = 3;
+    const lastClosedIndex = m5Candles.length - 2;
+    const breakBuffer = Math.max(0.001, minDrop * 0.05);
 
-    // Recorremos desde la penúltima vela hacia atrás (hasta 80 velas M5)
-    for (let i = m5Candles.length - 3; i >= Math.max(0, m5Candles.length - 80); i--) {
+    // La ultima vela puede seguir abierta. El origen y su BOS deben confirmarse
+    // solamente con velas cerradas.
+    for (let i = lastClosedIndex - 1; i >= Math.max(3, m5Candles.length - 80); i--) {
       const c = m5Candles[i];
-      const nextC = m5Candles[i + 1];
-
       const cOpen = Number(c.open);
       const cClose = Number(c.close);
       const cHigh = Number(c.high);
       const cLow = Number(c.low);
 
-      const nextOpen = Number(nextC.open);
-      const nextClose = Number(nextC.close);
-      const nextHigh = Number(nextC.high);
-      const nextLow = Number(nextC.low);
+      // Ultima vela contraria inmediatamente antes del desplazamiento.
+      const isCandidateCandle = isBoom ? cClose < cOpen : cClose > cOpen;
+      if (!isCandidateCandle) continue;
 
-      let isCandidateCandle = false;
+      const firstImpulseCandle = m5Candles[i + 1];
+      const firstImpulseOpen = Number(firstImpulseCandle.open);
+      const firstImpulseClose = Number(firstImpulseCandle.close);
+      const startsInExpectedDirection = isBoom
+        ? firstImpulseClose > firstImpulseOpen
+        : firstImpulseClose < firstImpulseOpen;
+      if (!startsInExpectedDirection) continue;
+
+      const priorCandles = m5Candles.slice(Math.max(0, i - structureLookback), i);
+      if (priorCandles.length < 3) continue;
+
+      const structureLevel = isBoom
+        ? Math.max(...priorCandles.map((item) => Number(item.high)))
+        : Math.min(...priorCandles.map((item) => Number(item.low)));
+
+      let confirmationIndex = -1;
       let spikeMagnitude = 0;
+      let impulseLow = Number.POSITIVE_INFINITY;
+      let impulseHigh = Number.NEGATIVE_INFINITY;
+      const impulseEndIndex = Math.min(lastClosedIndex, i + impulseWindow);
 
-      if (!isBoom) {
-        // En Crash: Bearish Order Block es la última vela verde previa al spike bajista
-        isCandidateCandle = cClose > cOpen;
-        spikeMagnitude = Math.max(nextOpen - nextClose, cHigh - nextLow);
-      } else {
-        // En Boom: Bullish Order Block es la última vela roja previa al spike alcista
-        isCandidateCandle = cClose < cOpen;
-        spikeMagnitude = Math.max(nextClose - nextOpen, nextHigh - cLow);
+      // El impulso puede ocupar hasta tres velas, pero debe cerrar rompiendo el
+      // swing previo. Una mecha o una vela aislada no confirman un OB.
+      for (let j = i + 1; j <= impulseEndIndex; j++) {
+        const impulseCandle = m5Candles[j];
+        const impulseClose = Number(impulseCandle.close);
+        impulseLow = Math.min(impulseLow, Number(impulseCandle.low));
+        impulseHigh = Math.max(impulseHigh, Number(impulseCandle.high));
+
+        const directionalMove = isBoom
+          ? impulseHigh - cLow
+          : cHigh - impulseLow;
+        const netCloseMove = isBoom
+          ? impulseClose - cClose
+          : cClose - impulseClose;
+        const brokeStructure = isBoom
+          ? impulseClose > structureLevel + breakBuffer
+          : impulseClose < structureLevel - breakBuffer;
+
+        if (
+          directionalMove >= minDrop &&
+          netCloseMove >= minDrop * 0.5 &&
+          brokeStructure
+        ) {
+          confirmationIndex = j;
+          spikeMagnitude = directionalMove;
+          break;
+        }
       }
 
-      if (!isCandidateCandle || spikeMagnitude < minDrop) continue;
+      if (confirmationIndex === -1) continue;
 
       const obHigh = parseFloat(cHigh.toFixed(3));
       const obLow = parseFloat(cLow.toFixed(3));
       const obMid50 = parseFloat(((obHigh + obLow) / 2).toFixed(3));
 
-      // Evaluar interacción de las velas posteriores
       let mitigated = false;
       let broken = false;
 
-      for (let j = i + 2; j < m5Candles.length; j++) {
+      // La mitigacion se cuenta despues de la vela que confirma el impulso/BOS.
+      for (let j = confirmationIndex + 1; j < m5Candles.length; j++) {
         const postClose = Number(m5Candles[j].close);
         const postHigh = Number(m5Candles[j].high);
         const postLow = Number(m5Candles[j].low);
 
         if (!isBoom) {
-          // En Crash: Roto si cierra por encima del techo; Mitigado si toca el 50%
           if (postClose > obHigh) {
             broken = true;
             break;
           }
-          if (postHigh >= obMid50) {
-            mitigated = true;
-          }
+          if (postHigh >= obMid50) mitigated = true;
         } else {
-          // En Boom: Roto si cierra por debajo de la base; Mitigado si baja y toca el 50%
           if (postClose < obLow) {
             broken = true;
             break;
           }
-          if (postLow <= obMid50) {
-            mitigated = true;
-          }
+          if (postLow <= obMid50) mitigated = true;
         }
+      }
+
+      // Protege tambien contra una invalidacion en la vela M5 aun abierta.
+      if ((!isBoom && currentPrice > obHigh) || (isBoom && currentPrice < obLow)) {
+        broken = true;
       }
 
       let status: OrderBlockPoint['status'] = 'FRESCO';
       let statusLabel = 'Fresco (Sin mitigar) 🎯';
       let statusSeverity: OrderBlockPoint['statusSeverity'] = 'success';
-
-      const inZone = currentPrice >= obLow && currentPrice <= obHigh;
+      const inZone = !broken && currentPrice >= obLow && currentPrice <= obHigh;
 
       if (broken) {
         status = 'INVALIDADO';
@@ -1118,10 +1158,8 @@ export class CrashIaStrategyService {
       if (list.length >= 10) break;
     }
 
-    // Seleccionar el Order Block ACTIVO más relevante:
-    // Prioridad 1: Uno en el que el precio esté EN_ZONA actualmente
-    // Prioridad 2: El OB FRESCO más cercano en dirección al retroceso
-    // Prioridad 3: El primer OB FRESCO
+    // Solo un OB fresco o actualmente en zona puede estar activo. Los mitigados e
+    // invalidados permanecen en el historial para diagnostico, sin dibujar entradas.
     let active: OrderBlockPoint | null = list.find((ob) => ob.status === 'EN_ZONA') || null;
 
     if (!active) {
@@ -1133,10 +1171,6 @@ export class CrashIaStrategyService {
         freshList.sort((a, b) => Math.abs(a.distToPrice) - Math.abs(b.distToPrice));
         active = freshList[0];
       }
-    }
-
-    if (!active) {
-      active = list.find((ob) => ob.status === 'FRESCO') || list[0] || null;
     }
 
     return { active, list };
