@@ -85,7 +85,7 @@ function toMarketName(symbol: string): string {
 export function getNextQuarterHourInfo(): { nextDate: Date; msRemaining: number; nextIso: string } {
   const now = new Date();
   const nextDate = new Date(now);
-  const evaluationMinutes = [13, 28, 43];
+  const evaluationMinutes = [13, 28, 43, 58];
   const nextMinute = evaluationMinutes.find((minute) => minute > now.getMinutes());
 
   if (nextMinute === undefined) {

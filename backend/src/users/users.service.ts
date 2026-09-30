@@ -35,8 +35,9 @@ export class UsersService {
   findRecipientsForH1() {
     return this.usersRepo
       .createQueryBuilder('user')
-      .select(['user.countryCallingCode', 'user.phoneNumber', 'user.notificationGroup'])
-      .where("NULLIF(BTRIM(user.countryCallingCode), '') IS NOT NULL")
+      .select(['user.email', 'user.countryCallingCode', 'user.phoneNumber', 'user.notificationGroup'])
+      .where("NULLIF(BTRIM(user.email), '') IS NOT NULL")
+      .andWhere("NULLIF(BTRIM(user.countryCallingCode), '') IS NOT NULL")
       .andWhere("NULLIF(BTRIM(user.phoneNumber), '') IS NOT NULL")
       .andWhere("(user.notificationGroup IS NULL OR user.notificationGroup IN ('ALL', 'H1_ONLY'))")
       .getMany();
@@ -45,8 +46,9 @@ export class UsersService {
   findRecipientsForAll() {
     return this.usersRepo
       .createQueryBuilder('user')
-      .select(['user.countryCallingCode', 'user.phoneNumber', 'user.notificationGroup'])
-      .where("NULLIF(BTRIM(user.countryCallingCode), '') IS NOT NULL")
+      .select(['user.email', 'user.countryCallingCode', 'user.phoneNumber', 'user.notificationGroup'])
+      .where("NULLIF(BTRIM(user.email), '') IS NOT NULL")
+      .andWhere("NULLIF(BTRIM(user.countryCallingCode), '') IS NOT NULL")
       .andWhere("NULLIF(BTRIM(user.phoneNumber), '') IS NOT NULL")
       .andWhere("(user.notificationGroup IS NULL OR user.notificationGroup = 'ALL')")
       .getMany();

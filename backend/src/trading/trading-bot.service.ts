@@ -82,6 +82,8 @@ export class TradingBotService implements OnModuleInit {
   private h1EvaluationInFlight = false;
   private lastH1AnalysisAt = 0;
   private lastDashboardEvaluationMinuteKey = -1;
+  private lastCrashBoomWhatsAppMinuteKey = -1;
+  private crashBoomWhatsAppInFlight = false;
 
   constructor(
     @InjectRepository(TradeRecord)
@@ -637,6 +639,28 @@ export class TradingBotService implements OnModuleInit {
   // ════════════════════════════════════════════════════════════════════════════
 
   async evaluateStrategiesLoop() {
+    const now = new Date();
+    const minuteKey = Math.floor(now.getTime() / 60_000);
+    const isScheduledWindow = this.h1EvaluationMinutes.includes(now.getMinutes());
+
+    // El radar se envia cuatro veces por hora aunque nadie tenga abierta la pantalla.
+    // El autotrade conserva su regla independiente de usuario online.
+    if (
+      isScheduledWindow &&
+      this.lastCrashBoomWhatsAppMinuteKey !== minuteKey &&
+      !this.crashBoomWhatsAppInFlight
+    ) {
+      this.lastCrashBoomWhatsAppMinuteKey = minuteKey;
+      this.crashBoomWhatsAppInFlight = true;
+      try {
+        await this.evaluateScheduledCrashBoomAlerts(minuteKey);
+      } catch (error: any) {
+        this.logger.error(`Error enviando radar Crash/Boom por WhatsApp: ${error?.message || error}`);
+      } finally {
+        this.crashBoomWhatsAppInFlight = false;
+      }
+    }
+
     // ── REGLA CRÍTICA USUARIO: Si weimarsuber@gmail.com no está logueado en la app, NO hacer autotrade ──
     const isUserOnline = await this.isUserAuthorizedOnline();
     if (!isUserOnline) {
@@ -645,8 +669,6 @@ export class TradingBotService implements OnModuleInit {
 
     // A. Evaluación Estrategia H1 Sin Mecha (Velas Marubozu)
     // H1 es una señal directa y no depende del cupo global de las otras estrategias.
-    const now = new Date();
-    const minuteKey = Math.floor(now.getTime() / 60_000);
     const shouldEvaluateDashboard =
       this.h1EvaluationMinutes.includes(now.getMinutes()) &&
       this.lastDashboardEvaluationMinuteKey !== minuteKey;
@@ -1006,6 +1028,24 @@ export class TradingBotService implements OnModuleInit {
 
   private async isH1AutoTradingAllowed(): Promise<boolean> {
     return this.isUserAuthorizedOnline();
+  }
+
+  private async evaluateScheduledCrashBoomAlerts(minuteKey: number): Promise<void> {
+    const evaluations = await this.crashIaService.getSummaryAll();
+    const reviewStatuses = new Set(['EN_ZONA_50', 'EN_BASE_CAJA', 'EN_RETESTEO']);
+    const candidates = evaluations
+      .filter((item) => item.canBuy || item.canSell || reviewStatuses.has(item.status))
+      .sort((a, b) => Number(b.canBuy || b.canSell) - Number(a.canBuy || a.canSell));
+
+    if (!candidates.length) {
+      this.logger.log('[CRASH/BOOM WHATSAPP] Evaluacion completada sin indices candidatos.');
+      return;
+    }
+
+    await this.evolutionCallService.notifyCrashBoomAlerts(
+      candidates,
+      `scheduled-${minuteKey}`,
+    );
   }
 
   private async evaluateCrashBoomStrategy() {

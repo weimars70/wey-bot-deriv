@@ -409,7 +409,7 @@ const lastWeyUpdateTime = computed(() => {
 
 function updateCountdown() {
   const now = new Date();
-  const evaluationMinutes = [13, 28, 43];
+  const evaluationMinutes = [13, 28, 43, 58];
   const minutes = now.getMinutes();
 
   if (evaluationMinutes.includes(minutes) && now.getSeconds() <= 1) {

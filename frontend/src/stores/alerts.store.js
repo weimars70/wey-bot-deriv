@@ -14,15 +14,11 @@ let notifChannelCreated = false;
 let notifPermissionGranted = false;
 let notifIdCounter = 1000;
 const H1_ALERT_ALLOWED_EMAIL = 'weimarsuber@gmail.com';
-const H1_EVALUATION_MINUTES = [13, 28, 43];
+const H1_EVALUATION_MINUTES = [13, 28, 43, 58];
 
 function isScheduledSignalType(type = '') {
   return type === 'H1_NO_WICK'
     || type.startsWith('DOUBLE_WICK')
-    || type.includes('CRASH_')
-    || type.includes('BOOM_')
-    || type === 'OB_EN_ZONA'
-    || type === 'CONFIRMACION_ZONA'
     || type === 'HIGH_STARS_SIGNAL'
     || type.includes('SPIKE');
 }
@@ -32,7 +28,7 @@ function isAllowedH1AlertUser(authStore) {
 }
 
 function getPreSpikeEvaluationWindow(now = new Date()) {
-  const evaluationMinutes = [13, 28, 43];
+  const evaluationMinutes = H1_EVALUATION_MINUTES;
   const minute = now.getMinutes();
   if (!evaluationMinutes.includes(minute)) return null;
 
@@ -136,6 +132,94 @@ function formatPronounceableMarket(symbol) {
   if (s.includes('BOOM200'))   return 'Boom doscientos';
   if (s.includes('BOOM100'))   return 'Boom cien';
   return s;
+}
+
+function formatAlertPrice(value) {
+  const price = Number(value);
+  if (!Number.isFinite(price)) return '--';
+  return price.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function compactAlertReason(reason, maxLength = 120) {
+  const normalized = String(reason || 'esperar confirmacion de reaccion')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 3)}...`
+    : normalized;
+}
+
+function buildCrashBoomAlertReport(item) {
+  const isBoom = item.marketType === 'BOOM' || item.symbol.startsWith('BOOM');
+  const direction = isBoom ? 'BUY' : 'SELL';
+  const filters = item.filters || {};
+  const ready = isBoom ? Boolean(item.canBuy) : Boolean(item.canSell);
+  const coolingCount = Number(
+    isBoom ? filters.consecutiveRedM1 : filters.consecutiveGreenM1,
+  ) || 0;
+  const coolingRequired = Number(filters.minGreenRequired) || 3;
+  const coolingColor = isBoom ? 'rojas' : 'verdes';
+  const expectedTrend = isBoom ? 'alcista' : 'bajista';
+  const inRetest = item.status === 'EN_RETESTEO'
+    || (item.retestZone?.isInRetest && !item.retestZone?.isReadyForEntry);
+  const inEntryArea = item.status === 'EN_ZONA_50' || item.status === 'EN_RETESTEO';
+  const orderBlockInZone = item.activeOrderBlock?.status === 'EN_ZONA';
+  const fulfilled = [];
+  const missing = [];
+
+  if (inEntryArea) {
+    fulfilled.push('zona de precio activa');
+  } else if (ready) {
+    fulfilled.push('reaccion M5 valida');
+  } else if (item.status === 'EN_BASE_CAJA') {
+    missing.push(`llegar al 50% (${formatAlertPrice(item.entryLevel50)})`);
+  }
+
+  if (filters.trendOk) {
+    fulfilled.push(`tendencia M15 ${expectedTrend}`);
+  } else {
+    missing.push(`tendencia M15 ${expectedTrend}`);
+  }
+
+  if (filters.greenOk) {
+    fulfilled.push(`${coolingCount} velas ${coolingColor} M1`);
+  } else {
+    const remaining = Math.max(0, coolingRequired - coolingCount);
+    missing.push(`${remaining} vela(s) ${coolingColor} M1 (${coolingCount}/${coolingRequired})`);
+  }
+
+  if (inRetest) {
+    missing.push('salir del retesteo M5');
+  } else if (item.m5Viability?.isViable) {
+    fulfilled.push('confirmacion M5');
+  } else {
+    missing.push(`M5: ${compactAlertReason(item.m5Viability?.reason)}`);
+  }
+
+  if (orderBlockInZone) fulfilled.push('precio dentro del OB');
+
+  const rsi = Number(filters.rsi_M5);
+  const context = Number.isFinite(rsi) ? `RSI M5 ${rsi.toFixed(1)} (contexto)` : null;
+  const fingerprint = ready
+    ? `READY_${direction}`
+    : [
+        'REVIEW',
+        item.status,
+        filters.trendOk ? 'T1' : 'T0',
+        filters.greenOk ? 'C1' : `C${coolingCount}`,
+        item.m5Viability?.isViable ? 'M1' : 'M0',
+        inRetest ? 'R1' : 'R0',
+      ].join('_');
+
+  return {
+    isBoom,
+    direction,
+    ready,
+    fulfilled,
+    missing,
+    context,
+    fingerprint,
+  };
 }
 
 let sharedAudioCtx = null;
@@ -252,6 +336,7 @@ export const useAlertsStore = defineStore('alerts', {
     soundEnabled: localStorage.getItem('alerts_sound_enabled') !== 'false',
     voiceEnabled: localStorage.getItem('alerts_voice_enabled') !== 'false',
     lastAlertTimestamps: {},
+    crashBoomEvaluationStates: {},
     lastPreSpikeEvaluationKey: null,
     preSpikeEvaluationInFlight: false,
     pollingTimer: null,
@@ -545,95 +630,48 @@ export const useAlertsStore = defineStore('alerts', {
     checkSingleEvaluation(item) {
       if (!item || !item.symbol) return;
       const pronounce = formatPronounceableMarket(item.symbol);
-      const isBoom = item.marketType === 'BOOM' || item.symbol.startsWith('BOOM');
+      const report = buildCrashBoomAlertReport(item);
+      const reviewStatuses = ['EN_ZONA_50', 'EN_BASE_CAJA', 'EN_RETESTEO'];
+      const shouldReview = report.ready || reviewStatuses.includes(item.status);
 
-      // 1. Oportunidad Confirmada (canSell / canBuy) -> ENTRADA REAL CONFIRMADA
-      if (item.canSell) {
-        this.triggerNotification({
-          type: 'CRASH_SELL_CONFIRMED',
-          symbol: item.symbol,
-          title: `🎯 ¡Venta Confirmada en ${item.symbol}!`,
-          message: `Precio en zona de reacción M5 (${item.m5Viability?.targetReactionPrice || item.entryLevel50}). Filtros y M5 aprobados.`,
-          speechText: `¡Atención! Entrada de venta confirmada en ${pronounce}.`,
-          targetPath: '/crash-ia',
-          routeQuery: { symbol: item.symbol },
-          severity: 'positive',
-          playChime: true,
-        });
+      if (!shouldReview) {
+        delete this.crashBoomEvaluationStates[item.symbol];
         return;
       }
 
-      if (item.canBuy) {
-        this.triggerNotification({
-          type: 'BOOM_BUY_CONFIRMED',
-          symbol: item.symbol,
-          title: `🎯 ¡Compra Confirmada en ${item.symbol}!`,
-          message: `Precio en zona de reacción M5 (${item.m5Viability?.targetReactionPrice || item.entryLevel50}). Filtros y M5 aprobados.`,
-          speechText: `¡Atención! Entrada de compra confirmada en ${pronounce}.`,
-          targetPath: '/crash-ia',
-          routeQuery: { symbol: item.symbol },
-          severity: 'positive',
-          playChime: true,
-        });
-        return;
-      }
+      if (this.crashBoomEvaluationStates[item.symbol] === report.fingerprint) return;
+      this.crashBoomEvaluationStates[item.symbol] = report.fingerprint;
 
-      // 2. EN ZONA GENERAL DE LA CAJA (Monitoreo de radar con sonido limpio)
-      if (item.status === 'EN_ZONA_50') {
-        const m5Esperando = item.m5Viability && !item.m5Viability.isViable;
-        if (isBoom) {
-          this.triggerNotification({
-            type: 'BOOM_IN_ZONE',
-            symbol: item.symbol,
-            title: `⚡ ${item.symbol} en Zona de Descuento 50% (BUY)`,
-            message: m5Esperando
-              ? `En zona 50% pero en M5 le falta retroceso al Order Block (${item.m5Viability.targetReactionPrice}). Monitoreando.`
-              : `El precio está en zona de descuento 50% (${item.entryLevel50}). Monitoreando confirmación.`,
-            speechText: m5Esperando
-              ? `Radar: ${pronounce} en zona, esperando retroceso en temporalidad cinco minutos.`
-              : `Radar: ${pronounce} en zona de seguimiento.`,
-            targetPath: '/crash-ia',
-            routeQuery: { symbol: item.symbol },
-            severity: 'warning',
-            playChime: true,
-            toneType: 'radar',
-          });
-        } else {
-          this.triggerNotification({
-            type: 'CRASH_IN_ZONE',
-            symbol: item.symbol,
-            title: `⚡ ${item.symbol} en Zona Superior 50% (SELL)`,
-            message: m5Esperando
-              ? `En zona 50% pero en M5 le falta subida a la resistencia (${item.m5Viability.targetReactionPrice}). Monitoreando.`
-              : `El precio está en zona del 50% superior (${item.entryLevel50}). Monitoreando confirmación.`,
-            speechText: m5Esperando
-              ? `Radar: ${pronounce} en zona, esperando subida en temporalidad cinco minutos.`
-              : `Radar: ${pronounce} en zona de seguimiento.`,
-            targetPath: '/crash-ia',
-            routeQuery: { symbol: item.symbol },
-            severity: 'warning',
-            playChime: true,
-            toneType: 'radar',
-          });
-        }
-      }
+      const fulfilledText = report.fulfilled.length
+        ? report.fulfilled.join(', ')
+        : 'ningun filtro completo';
+      const missingText = report.missing.length
+        ? report.missing.join(', ')
+        : 'ninguno';
+      const price = formatAlertPrice(item.currentPrice);
+      const stopLoss = formatAlertPrice(item.stopLossPrice);
 
-      // 3. Order Block Activo en Zona
-      if (item.activeOrderBlock && item.activeOrderBlock.status === 'EN_ZONA') {
-        const op = isBoom ? 'compra' : 'venta';
-        this.triggerNotification({
-          type: 'OB_EN_ZONA',
-          symbol: item.symbol,
-          title: `🏛️ ${item.symbol} en Zona de Order Block`,
-          message: `El precio ingresó al bloque institucional (50%: ${item.activeOrderBlock.mid50}).`,
-          speechText: `Radar: ${pronounce} ingresando al bloque de órdenes para ${op}.`,
-          targetPath: '/crash-ia',
-          routeQuery: { symbol: item.symbol },
-          severity: 'warning',
-          playChime: true,
-          toneType: 'radar',
-        });
-      }
+      this.triggerNotification({
+        type: report.ready
+          ? `${report.isBoom ? 'BOOM_BUY' : 'CRASH_SELL'}_CONFIRMED`
+          : `${report.isBoom ? 'BOOM' : 'CRASH'}_REVIEW`,
+        symbol: item.symbol,
+        title: report.ready
+          ? `LISTO ${report.direction}: ${item.symbol}`
+          : `REVISAR ${item.symbol} ${report.direction} - AUN NO ENTRAR`,
+        message: report.ready
+          ? `Precio ${price} | Cumple: ${fulfilledText} | SL ${stopLoss}${report.context ? ` | ${report.context}` : ''}`
+          : `Cumple: ${fulfilledText} | Falta: ${missingText} | Precio ${price}${report.context ? ` | ${report.context}` : ''}`,
+        speechText: report.ready
+          ? `Atencion. ${pronounce} listo para ${report.isBoom ? 'compra' : 'venta'}. Cumple zona, tendencia, enfriamiento y confirmacion M cinco. Revise la entrada.`
+          : `Revise ${pronounce} para ${report.isBoom ? 'compra' : 'venta'}. Aun no entrar. Falta ${missingText}.`,
+        targetPath: '/crash-ia',
+        routeQuery: { symbol: item.symbol },
+        severity: report.ready ? 'positive' : 'warning',
+        dedupeKey: `${item.symbol}_${report.fingerprint}`,
+        playChime: true,
+        toneType: report.ready ? 'trade' : 'radar',
+      });
     },
 
     /** Alerta de dos velas: M5 opera; H1 solo avisa. */
@@ -841,6 +879,7 @@ export const useAlertsStore = defineStore('alerts', {
         this.pollingTimer = null;
       }
       this.isInitialized = false;
+      this.crashBoomEvaluationStates = {};
 
       try {
         if (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform()) {

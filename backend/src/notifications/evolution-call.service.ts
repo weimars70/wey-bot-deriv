@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../users/users.service';
+import type { CrashIaEvaluation } from '../strategies/crash-ia-strategy.service';
 
 export interface H1AnticipatedCallAlert {
   symbol: string;
@@ -108,6 +109,43 @@ export class EvolutionCallService {
       apiKey,
       (number) => ({ number, text: `*WEY TRADING - PUNTO VIGILADO*\n\nIndice: *${symbol}*\nEstado: *${stateText}*\nPunto registrado: *${entryPrice}*\n\nEl nivel esta siendo evaluado.` }),
       `Mensaje punto vigilado ${symbol}`,
+    );
+  }
+
+  async notifyCrashBoomAlerts(
+    evaluations: Array<Omit<CrashIaEvaluation, 'chartCandles'>>,
+    deliveryWindow: string,
+  ): Promise<void> {
+    if (!evaluations.length || !this.isTextEnabled()) return;
+
+    const url = (this.config.get<string>('EVOLUTION_API_URL') || 'http://2.58.80.90:3024').replace(/\/+$/, '');
+    const instance = (this.config.get<string>('EVOLUTION_INSTANCE') || 'wey-trading-bot').trim();
+    const apiKey = (this.config.get<string>('EVOLUTION_API_KEY') || this.config.get<string>('APIKEYWHATSAPP') || '').trim();
+    const recipients = await this.getAllRecipients();
+    if (!url || !instance || !apiKey || !recipients.length) {
+      this.logger.warn('Alertas Crash/Boom por WhatsApp habilitadas, pero faltan datos de Evolution API o destinatarios.');
+      return;
+    }
+    this.cleanupOldWindows();
+
+    const stateKey = evaluations
+      .map((item) => [
+        item.symbol,
+        item.canBuy || item.canSell ? 'READY' : item.status,
+        item.filters.trendOk ? 'T1' : 'T0',
+        item.filters.greenOk ? 'C1' : 'C0',
+        item.m5Viability?.isViable ? 'M1' : 'M0',
+      ].join(':'))
+      .sort()
+      .join(',');
+
+    await this.sendChannelNotification(
+      `CRASH_BOOM:${deliveryWindow}:${stateKey}`,
+      recipients,
+      `${url}/message/sendText/${encodeURIComponent(instance)}`,
+      apiKey,
+      (number) => ({ number, text: this.buildCrashBoomTextMessage(evaluations) }),
+      `Mensaje Crash/Boom ${evaluations.map((item) => item.symbol).join(', ')}`,
     );
   }
 
@@ -236,6 +274,77 @@ export class EvolutionCallService {
         : []),
       'Revisa el grafico antes de operar.',
     ].join('\n');
+  }
+
+  private buildCrashBoomTextMessage(
+    evaluations: Array<Omit<CrashIaEvaluation, 'chartCandles'>>,
+  ): string {
+    const checkedAt = new Intl.DateTimeFormat('es-CO', {
+      timeZone: 'America/Bogota',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date());
+    const sections = evaluations.flatMap((item) => {
+      const isBoom = item.marketType === 'BOOM';
+      const direction = isBoom ? 'BUY' : 'SELL';
+      const ready = isBoom ? item.canBuy : item.canSell;
+      const count = isBoom
+        ? item.filters.consecutiveRedM1
+        : item.filters.consecutiveGreenM1;
+      const required = item.filters.minGreenRequired || 3;
+      const color = isBoom ? 'rojas' : 'verdes';
+      const expectedTrend = isBoom ? 'alcista' : 'bajista';
+      const inRetest = item.status === 'EN_RETESTEO'
+        || (item.retestZone?.isInRetest && !item.retestZone.isReadyForEntry);
+      const fulfilled: string[] = [];
+      const missing: string[] = [];
+
+      if (item.status === 'EN_ZONA_50' || item.status === 'EN_RETESTEO') {
+        fulfilled.push('zona de precio activa');
+      } else if (ready) {
+        fulfilled.push('reaccion M5 valida');
+      } else if (item.status === 'EN_BASE_CAJA') {
+        missing.push(`llegar al 50% (${item.entryLevel50})`);
+      }
+
+      if (item.filters.trendOk) fulfilled.push(`tendencia M15 ${expectedTrend}`);
+      else missing.push(`tendencia M15 ${expectedTrend}`);
+
+      if (item.filters.greenOk) fulfilled.push(`${count} velas ${color} M1`);
+      else missing.push(`${Math.max(0, required - count)} vela(s) ${color} M1 (${count}/${required})`);
+
+      if (inRetest) missing.push('salir del retesteo M5');
+      else if (item.m5Viability?.isViable) fulfilled.push('confirmacion M5');
+      else missing.push(`M5: ${this.compactReason(item.m5Viability?.reason)}`);
+
+      if (item.activeOrderBlock?.status === 'EN_ZONA') fulfilled.push('precio dentro del OB');
+
+      return [
+        `*${ready ? 'LISTO' : 'REVISAR'} ${direction} - ${item.mercado || item.symbol}${ready ? '' : ' (AUN NO ENTRAR)'}*`,
+        `Precio: ${item.currentPrice}${ready ? ` | SL: ${item.stopLossPrice}` : ''}`,
+        `Cumple: ${fulfilled.length ? fulfilled.join(', ') : 'ningun filtro completo'}`,
+        `Falta: ${missing.length ? missing.join(', ') : 'nada'}`,
+        `Contexto: RSI M5 ${item.filters.rsi_M5}`,
+        '',
+      ];
+    });
+
+    return [
+      '*WEY TRADING - ZONAS V Y H1*',
+      `Evaluacion programada: ${checkedAt}`,
+      '',
+      ...sections,
+      'Confirma el grafico antes de operar.',
+    ].join('\n');
+  }
+
+  private compactReason(reason?: string, maxLength = 100): string {
+    const normalized = String(reason || 'esperar confirmacion de reaccion')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return normalized.length > maxLength
+      ? `${normalized.slice(0, maxLength - 3)}...`
+      : normalized;
   }
 
   private async getH1Recipients(): Promise<string[]> {
