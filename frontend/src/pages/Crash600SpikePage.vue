@@ -493,9 +493,9 @@
             <q-select
               v-model="minScore"
               :options="[
-                { label: '≥ 60 pts (Moderado)', value: 60 },
-                { label: '≥ 65 pts (Estándar Recomendado)', value: 65 },
-                { label: '≥ 75 pts (Alta Confluencia)', value: 75 }
+                { label: '≥ 80 pts (Estricto)', value: 80 },
+                { label: '≥ 85 pts (Muy estricto)', value: 85 },
+                { label: '≥ 90 pts (Máxima confluencia)', value: 90 }
               ]"
               emit-value
               map-options
@@ -698,7 +698,7 @@ function inspectTradeCandles(trade) {
 
 // Parámetros de Backtest
 const backtestDays = ref(30);
-const minScore = ref(65);
+const minScore = ref(80);
 const backtestResult = ref(null);
 
 const backtestColumns = [
@@ -809,7 +809,14 @@ async function runBacktest() {
       message: `Simulación completada: ${res.totalTrades} operaciones en ${selectedSymbolLabel.value} (${res.winRatePct}% Win Rate)`,
     });
   } catch (err) {
-    $q.notify({ type: 'negative', message: 'Error al ejecutar el simulador histórico' });
+    const apiMessage = err.response?.data?.message;
+    const details = Array.isArray(apiMessage) ? apiMessage.join(', ') : apiMessage || err.message;
+    console.error('Error en simulador histórico:', err);
+    $q.notify({
+      type: 'negative',
+      message: `Error en simulador histórico: ${details || 'sin detalles del servidor'}`,
+      timeout: 10000,
+    });
   } finally {
     runningBacktest.value = false;
   }

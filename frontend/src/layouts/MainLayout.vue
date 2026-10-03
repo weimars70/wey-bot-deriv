@@ -98,7 +98,7 @@
               <div class="radar-dot q-mx-auto q-mb-sm"></div>
               <div class="text-weight-bold text-slate-700">Sin alertas activas en este instante</div>
               <div class="text-caption text-slate-400 q-mt-xs">
-                Monitoreo activo en segundo plano de Crash &amp; Boom IA (Zonas V, 50% y OB) y Estrategia H1.
+                Monitoreo activo de H1, Crash &amp; Boom IA y niveles vigilados, incluso si la app estuvo cerrada.
               </div>
             </div>
 
@@ -479,9 +479,12 @@ const voiceModel = computed({
 function getAlertAvatarColor(type) {
   if (!type) return 'primary';
   if (type === 'TRADE_OPENED') return 'deep-purple-7';
+  if (type.startsWith('WATCHED_LEVEL')) return 'teal-7';
   if (type.startsWith('H1_NO_WICK')) return 'purple-8';
   if (type.includes('BOOM') && type.includes('BUY')) return 'emerald-7';
   if (type.includes('CRASH') && type.includes('SELL')) return 'indigo-7';
+  if (type.includes('BOOM')) return 'emerald-7';
+  if (type.includes('CRASH')) return 'indigo-7';
   if (type.includes('IN_ZONE')) return 'deep-orange-7';
   if (type === 'OB_EN_ZONA') return 'amber-8';
   if (type === 'HIGH_STARS_SIGNAL') return 'cyan-7';
@@ -491,9 +494,12 @@ function getAlertAvatarColor(type) {
 function getAlertAvatarIcon(type) {
   if (!type) return 'notifications';
   if (type === 'TRADE_OPENED') return 'rocket_launch';
+  if (type.startsWith('WATCHED_LEVEL')) return 'location_on';
   if (type.startsWith('H1_NO_WICK')) return 'candlestick_chart';
   if (type.includes('BOOM') && type.includes('BUY')) return 'shopping_cart';
   if (type.includes('CRASH') && type.includes('SELL')) return 'point_of_sale';
+  if (type.includes('BOOM')) return 'trending_up';
+  if (type.includes('CRASH')) return 'trending_down';
   if (type.includes('IN_ZONE')) return 'radar';
   if (type === 'OB_EN_ZONA') return 'account_balance';
   if (type === 'HIGH_STARS_SIGNAL') return 'star';

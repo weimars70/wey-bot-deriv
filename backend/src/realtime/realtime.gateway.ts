@@ -103,4 +103,10 @@ export class RealtimeGateway
   onBalance(balance: any) {
     this.server.emit('balance', balance);
   }
+
+  @OnEvent('signal-center.alert')
+  onSignalCenterAlert(alert: any) {
+    if (!alert?.id) return;
+    this.server.emit('signal-center.alert', alert);
+  }
 }

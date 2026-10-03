@@ -73,7 +73,7 @@ export interface LiveCrash600Evaluation {
 export interface SpikeBacktestTrade {
   id: string;
   symbol: string;
-  direction: 'VENTA';
+  direction: 'VENTA' | 'COMPRA';
   entryPrice: number;
   entryTime: number;
   entryDateStr: string;
@@ -209,7 +209,10 @@ export class CrashSpikeStrategyService {
       chartGranularity === 900 ? this.fetchRecentCandles(symbol, 900, 150) : Promise.resolve([]),
     ]);
 
-    const latestM1 = candlesM1[candlesM1.length - 1];
+    const nowSec = Math.floor(Date.now() / 1000);
+    const closedCandlesM1 = candlesM1.filter((c) => Number(c.epoch) + 60 <= nowSec);
+    const closedCandlesM5 = candlesM5.filter((c) => Number(c.epoch) + 300 <= nowSec);
+    const latestM1 = closedCandlesM1[closedCandlesM1.length - 1];
     const currentPrice = latestM1 ? latestM1.close : 0;
 
     // 2. Identificar el último spike grande en M1 y M5 (umbral dinámico por símbolo)
@@ -217,19 +220,18 @@ export class CrashSpikeStrategyService {
     let spikeIndexM1 = -1;
     const isBoom = params.direction === 'BUY';
 
-    for (let i = candlesM1.length - 1; i >= 0; i--) {
-      const c = candlesM1[i];
+    for (let i = closedCandlesM1.length - 1; i >= 0; i--) {
+      const c = closedCandlesM1[i];
       // Para Crash: caída = open - low. Para Boom: subida = high - open.
       const drop = isBoom ? (c.high - c.open) : (c.open - c.low);
       if (drop >= params.spikeMinDrop) {
         spikeIndexM1 = i;
-        const nowSec = Math.floor(Date.now() / 1000);
-        const minsAgo = Math.max(0, Math.round((nowSec - c.epoch) / 60));
+        const minsAgo = Math.max(0, Math.floor((nowSec - c.epoch - 60) / 60));
         lastSpikeData = {
           epoch: c.epoch,
           dateStr: new Date(c.epoch * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           dropPoints: Number(drop.toFixed(2)),
-          high: c.open,
+          high: c.high,
           low: c.low,
           minutesAgo: minsAgo,
         };
@@ -238,10 +240,10 @@ export class CrashSpikeStrategyService {
     }
 
     // 3. Conteo de velas M1 transcurridas y movimiento continuo (al alza para Crash, a la baja para Boom)
-    const candlesM1SinceLastSpike = spikeIndexM1 >= 0 ? (candlesM1.length - 1 - spikeIndexM1) : 10;
+    const candlesM1SinceLastSpike = spikeIndexM1 >= 0 ? (closedCandlesM1.length - 1 - spikeIndexM1) : 0;
     let greenRunM1 = 0;
-    for (let i = candlesM1.length - 1; i >= 0; i--) {
-      const c = candlesM1[i];
+    for (let i = closedCandlesM1.length - 2; i >= 0; i--) {
+      const c = closedCandlesM1[i];
       // Para Crash buscamos velas alcistas (carga antes de la caída). Para Boom: velas bajistas.
       const isCarga = isBoom ? (c.close <= c.open && (c.high - c.open) < params.spikeMinDrop * 0.6)
                              : (c.close >= c.open && (c.open - c.low) < params.spikeMinDrop * 0.6);
@@ -264,7 +266,7 @@ export class CrashSpikeStrategyService {
     }
 
     // 5. Medir confluencia con EMA 50 y EMA 21 en 5M
-    const closesM5 = candlesM5.map((c) => c.close);
+    const closesM5 = closedCandlesM5.map((c) => c.close);
     const ema50Arr = this.calcEma(closesM5, 50);
     const ema21Arr = this.calcEma(closesM5, 21);
     const ema50M5 = ema50Arr.length > 0 ? ema50Arr[ema50Arr.length - 1] : currentPrice;
@@ -276,9 +278,9 @@ export class CrashSpikeStrategyService {
     // 6. Análisis de agotamiento en la vela previa (M5 y M1)
     let momentumExhausted = false;
     let upperWickRejection = false;
-    if (candlesM5.length >= 3) {
-      const prevM5 = candlesM5[candlesM5.length - 2];
-      const prev2M5 = candlesM5[candlesM5.length - 3];
+    if (closedCandlesM5.length >= 3) {
+      const prevM5 = closedCandlesM5[closedCandlesM5.length - 1];
+      const prev2M5 = closedCandlesM5[closedCandlesM5.length - 2];
       const prevRange = prevM5.high - prevM5.low;
       const prevUpperWick = prevM5.high - Math.max(prevM5.open, prevM5.close);
       if (prevRange > 0 && (prevUpperWick / prevRange) >= 0.25) {
@@ -292,11 +294,11 @@ export class CrashSpikeStrategyService {
     }
 
     // 7. Detección de ZONAS DE RETESTEO (techos/pisos donde el índice reaccionó múltiples veces)
-    const retestZones = this.findRetestZones(candlesM5, currentPrice, params.spikeMinDrop, params.tolerancePts, isBoom);
+    const retestZones = this.findRetestZones(closedCandlesM5, currentPrice, params.spikeMinDrop, params.tolerancePts, isBoom);
     const activeRetestZone = retestZones.find((z) => z.isRetestingNow) || null;
 
     // 8. Filtro Horario (Horas de Oro vs Horas Trampa)
-    const nowUtcHour = new Date().getUTCHours();
+    const nowUtcHour = new Date(nowSec * 1000).getUTCHours();
     let hourType: 'EXPLOSIVA' | 'NEUTRAL' | 'TRAMPA' = 'NEUTRAL';
     if (this.EXPLOSIVE_HOURS.includes(nowUtcHour)) {
       hourType = 'EXPLOSIVA';
@@ -331,6 +333,35 @@ export class CrashSpikeStrategyService {
     // +10 pts por hora explosiva, o -20 pts por hora trampa
     if (hourType === 'EXPLOSIVA') score += 10;
     if (hourType === 'TRAMPA') score = Math.max(0, score - 20);
+    score = Math.min(score, 100);
+
+    const confirmationCandle = closedCandlesM1[closedCandlesM1.length - 1];
+    const confirmationRange = confirmationCandle ? confirmationCandle.high - confirmationCandle.low : 0;
+    const confirmationBody = confirmationCandle ? Math.abs(confirmationCandle.close - confirmationCandle.open) : 0;
+    const rejectionWick = confirmationCandle
+      ? isBoom
+        ? Math.min(confirmationCandle.open, confirmationCandle.close) - confirmationCandle.low
+        : confirmationCandle.high - Math.max(confirmationCandle.open, confirmationCandle.close)
+      : 0;
+    const rejectionConfirmed = Boolean(
+      confirmationCandle &&
+      confirmationRange > 0 &&
+      confirmationBody / confirmationRange >= 0.25 &&
+      rejectionWick / confirmationRange >= 0.25 &&
+      (isBoom ? confirmationCandle.close > confirmationCandle.open : confirmationCandle.close < confirmationCandle.open),
+    );
+    const hasRetestConfluence = Boolean(activeRetestZone && activeRetestZone.spikeCount >= 2);
+    const strictSignal = Boolean(
+      lastSpikeData &&
+      lastSpikeData.minutesAgo <= 30 &&
+      candlesM1SinceLastSpike >= greenRunM1 &&
+      greenRunM1 >= 8 && greenRunM1 <= 12 &&
+      isInRetraceZone &&
+      rejectionConfirmed &&
+      (hasRetestConfluence || isAtEma50) &&
+      hourType !== 'TRAMPA' &&
+      score >= 80,
+    );
 
     // Mapeo a Estrellas (1 a 5)
     let stars = 1;
@@ -343,15 +374,15 @@ export class CrashSpikeStrategyService {
     let decision: LiveCrash600Evaluation['decision'] = 'ESPERANDO_ZONA';
     let decisionMessage = 'Esperando que el precio suba a una zona de retesteo de spikes o retroceso del 50%.';
 
-    if (hourType === 'TRAMPA' && score < 65) {
+    if (hourType === 'TRAMPA') {
       decision = 'BLOQUEO_HORA';
       decisionMessage = `Hora UTC ${String(nowUtcHour).padStart(2, '0')}:00 clasificada como HORA TRAMPA (acumulación alcista lenta sin spikes).`;
-    } else if (activeRetestZone && activeRetestZone.spikeCount >= 2 && score >= 55) {
+    } else if (strictSignal && activeRetestZone && activeRetestZone.spikeCount >= 2) {
       decision = 'VENTA_CONFIRMADA';
       decisionMessage = `🎯 ¡ZONA DE RETESTEO ACTIVA (${activeRetestZone.level} pts)! Ha generado ${activeRetestZone.spikeCount} caídas previas (promedio: -${activeRetestZone.avgDrop} pts). Score: ${score} pts.`;
-    } else if (score >= 70) {
+    } else if (strictSignal) {
       decision = 'VENTA_CONFIRMADA';
-      decisionMessage = `¡CONFLUENCIA MÁXIMA (${score} pts)! Zona retroceso (${retracePercent}%), ${greenRunM1} velas M1 de carga y EMA 50.`;
+      decisionMessage = `Señal estricta confirmada: rechazo M1 cerrado, retroceso ${retracePercent}%, ${greenRunM1} velas de carga y score ${score}.`;
     } else if (activeRetestZone) {
       decision = 'PREPARANDO_GATILLO';
       decisionMessage = `Retesteando zona ${activeRetestZone.level} (${activeRetestZone.spikeCount} spikes previos). Carga M1: ${greenRunM1}/10 velas.`;
@@ -464,13 +495,13 @@ export class CrashSpikeStrategyService {
   private async checkAutoTradeTrigger() {
     if (!this.autoTradingActive) return;
 
-    // Cooldown mínimo de 15 minutos entre entradas automáticas
-    if (Date.now() - this.lastAutoTradeAt < 15 * 60 * 1000) {
+    // Una entrada automática como máximo por hora
+    if (Date.now() - this.lastAutoTradeAt < 60 * 60 * 1000) {
       return;
     }
 
     const evalData = await this.evaluateLiveCrash600(300, 'CRASH600');
-    if (evalData.decision === 'VENTA_CONFIRMADA' && evalData.score >= 70) {
+    if (evalData.decision === 'VENTA_CONFIRMADA' && evalData.score >= 80) {
       this.logger.log(`🤖 [AUTO-TRADING TRIGGER] Entrada automática disparada en ${evalData.symbol} (Score: ${evalData.score})`);
       await this.executeCrash600Trade(evalData.recommendedLot, evalData.symbol);
     }
@@ -479,7 +510,7 @@ export class CrashSpikeStrategyService {
   /**
    * Backtesting del Patrón Pre-Spike escalable hasta 100 días.
    */
-  async runBacktest(days: number = 30, minScore: number = 65, symbol: string = 'CRASH600'): Promise<SpikeBacktestResult> {
+  async runBacktest(days: number = 30, minScore: number = 80, symbol: string = 'CRASH600'): Promise<SpikeBacktestResult> {
     symbol = (symbol || 'CRASH600').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (!CrashSpikeStrategyService.SUPPORTED_SYMBOLS.includes(symbol)) symbol = 'CRASH600';
     const params = this.getSymbolParams(symbol);
@@ -500,6 +531,7 @@ export class CrashSpikeStrategyService {
     let lastSpikeLow = 0;
     let lastSpikeHigh = 0;
     let lastSpikeDrop = 0;
+    let lastSpikeIdx = -1;
     let cooldownUntilIdx = 0;
     const isBoom = params.direction === 'BUY';
 
@@ -514,6 +546,7 @@ export class CrashSpikeStrategyService {
         lastSpikeLow = c.low;
         lastSpikeHigh = c.high;
         lastSpikeDrop = candleDrop;
+        lastSpikeIdx = i;
       }
 
       // Evaluar condición de entrada en vela i
@@ -532,7 +565,10 @@ export class CrashSpikeStrategyService {
       // Conteo de velas verdes 5M previas
       let greenM5 = 0;
       for (let k = i - 1; k >= Math.max(0, i - 5); k--) {
-        if (candles5M[k].close >= candles5M[k].open) greenM5++;
+        const isCarga = isBoom
+          ? candles5M[k].close <= candles5M[k].open
+          : candles5M[k].close >= candles5M[k].open;
+        if (isCarga) greenM5++;
         else break;
       }
       if (greenM5 >= 2 && greenM5 <= 4) score += 20;
@@ -551,10 +587,28 @@ export class CrashSpikeStrategyService {
       if (this.EXPLOSIVE_HOURS.includes(hour)) score += 10;
       if (this.TRAP_HOURS.includes(hour)) score -= 20;
 
+      const candleRange = c.high - c.low;
+      const candleBody = Math.abs(c.close - c.open);
+      const rejectionWick = isBoom
+        ? Math.min(c.open, c.close) - c.low
+        : c.high - Math.max(c.open, c.close);
+      const hasDirectionalRejection = candleRange > 0 &&
+        candleBody / candleRange >= 0.25 &&
+        rejectionWick / candleRange >= 0.25 &&
+        (isBoom ? c.close > c.open : c.close < c.open);
+      const isRecentSpikeRetest = lastSpikeIdx >= 0 && i - lastSpikeIdx >= 1 && i - lastSpikeIdx <= 6;
+      const strictSetup = isRecentSpikeRetest &&
+        retracePct >= params.retraceMin && retracePct <= params.retraceMax &&
+        greenM5 >= 2 && greenM5 <= 4 &&
+        hasDirectionalRejection &&
+        distEma50Pct <= 0.50 &&
+        !this.TRAP_HOURS.includes(hour);
+
       // ¿Entrada califica?
-      if (score >= minScore) {
-        const entryPrice = c.close;
-        const entryTime = c.epoch;
+      if (score >= minScore && strictSetup) {
+        const entryCandle = candles5M[i + 1];
+        const entryPrice = entryCandle.open;
+        const entryTime = entryCandle.epoch;
         let exitPrice = entryPrice;
         let exitTime = entryTime;
         let result: 'WIN' | 'LOSS' = 'LOSS';
@@ -564,8 +618,6 @@ export class CrashSpikeStrategyService {
         for (let step = 1; step <= 2; step++) {
           const fc = candles5M[i + step];
           if (!fc) break;
-          const futureDrop = entryPrice - fc.low;
-
           // Spike capturado (umbral dinámico)
           const futureSpike = isBoom ? (fc.high - entryPrice) : (entryPrice - fc.low);
           if (futureSpike >= params.spikeMinDrop) {
@@ -581,12 +633,13 @@ export class CrashSpikeStrategyService {
             exitPrice = fc.close;
             exitTime = fc.epoch;
             exitReason = 'STOP_LOSS_10MIN';
-            result = (entryPrice - exitPrice) >= 5.0 ? 'WIN' : 'LOSS';
+            const directionalPnl = isBoom ? exitPrice - entryPrice : entryPrice - exitPrice;
+            result = directionalPnl >= 5.0 ? 'WIN' : 'LOSS';
           }
         }
 
-        const pnlPoints = Number((entryPrice - exitPrice).toFixed(2));
-        const lot = 0.30;
+        const pnlPoints = Number((isBoom ? exitPrice - entryPrice : entryPrice - exitPrice).toFixed(2));
+        const lot = params.recommendedLot;
         const pnlUsd = Number((pnlPoints * lot).toFixed(2));
         const durationMin = Math.max(5, Math.round((exitTime - entryTime) / 60));
 
@@ -652,7 +705,7 @@ export class CrashSpikeStrategyService {
         trades.push({
           id: `BT-${symbol}-${entryTime}`,
           symbol,
-          direction: 'VENTA',
+          direction: isBoom ? 'COMPRA' : 'VENTA',
           entryPrice,
           entryTime,
           entryDateStr: new Date(entryTime * 1000).toLocaleString('es-MX', { timeZoneName: 'short' }),
@@ -672,7 +725,7 @@ export class CrashSpikeStrategyService {
           candlesSnippet,
         });
 
-        cooldownUntilIdx = i + 3; // Cooldown de 15 minutos tras el trade
+        cooldownUntilIdx = i + 12; // Cooldown de 60 minutos tras el trade
       }
     }
 

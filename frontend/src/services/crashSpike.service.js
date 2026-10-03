@@ -29,7 +29,7 @@ export default {
       .post('/strategies/crash-spike/execute', { lot, symbol })
       .then((res) => res.data);
   },
-  runBacktest(days = 30, minScore = 65, symbol = 'CRASH600') {
+  runBacktest(days = 30, minScore = 80, symbol = 'CRASH600') {
     return api
       .post('/strategies/crash-spike/backtest', { days, minScore, symbol })
       .then((res) => res.data);

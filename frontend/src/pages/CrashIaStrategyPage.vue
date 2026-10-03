@@ -966,7 +966,7 @@ onMounted(() => {
   loadEvaluation();
   refreshTimer = setInterval(() => {
     loadEvaluation();
-  }, 15_000);
+  }, 15 * 60 * 1000);
 });
 
 onUnmounted(() => {

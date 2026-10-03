@@ -29,7 +29,7 @@ export class CrashSpikeStrategyController {
     @Body('symbol') symbol?: string,
   ) {
     const d = days ? Number(days) : 30;
-    const s = minScore ? Number(minScore) : 65;
+    const s = minScore ? Number(minScore) : 80;
     return this.service.runBacktest(d, s, symbol || 'CRASH600');
   }
 

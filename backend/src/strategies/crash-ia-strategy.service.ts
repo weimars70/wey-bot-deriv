@@ -108,6 +108,9 @@ export interface CrashIaEvaluation {
 @Injectable()
 export class CrashIaStrategyService {
   private readonly logger = new Logger(CrashIaStrategyService.name);
+  private readonly evaluationCacheTtlMs = 15 * 60 * 1000;
+  private readonly evaluationCache = new Map<string, { expiresAt: number; value: CrashIaEvaluation }>();
+  private readonly evaluationsInFlight = new Map<string, Promise<CrashIaEvaluation>>();
 
   constructor(private readonly candlesService: CandlesService) {}
 
@@ -126,6 +129,28 @@ export class CrashIaStrategyService {
    */
   async evaluateSymbol(symbol: string, timeframeMinutes = 5): Promise<CrashIaEvaluation> {
     const sym = symbol.toUpperCase();
+    const cacheKey = `${sym}:${timeframeMinutes}`;
+    const cached = this.evaluationCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const inFlight = this.evaluationsInFlight.get(cacheKey);
+    if (inFlight) return inFlight;
+
+    const evaluation = this.calculateSymbolEvaluation(sym, timeframeMinutes);
+    this.evaluationsInFlight.set(cacheKey, evaluation);
+    try {
+      const value = await evaluation;
+      this.evaluationCache.set(cacheKey, {
+        expiresAt: Date.now() + this.evaluationCacheTtlMs,
+        value,
+      });
+      return value;
+    } finally {
+      this.evaluationsInFlight.delete(cacheKey);
+    }
+  }
+
+  private async calculateSymbolEvaluation(sym: string, timeframeMinutes: number): Promise<CrashIaEvaluation> {
     const isBoom = sym.startsWith('BOOM');
     const marketType: 'CRASH' | 'BOOM' = isBoom ? 'BOOM' : 'CRASH';
     const operationType: 'SELL' | 'BUY' = isBoom ? 'BUY' : 'SELL';

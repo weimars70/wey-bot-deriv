@@ -3,6 +3,8 @@ import { useAuthStore } from './auth.store';
 import { crashIaStrategyService } from 'src/services/crashIaStrategy.service';
 import { weySignalsService } from 'src/services/weySignals.service';
 import { h1StrategyService } from 'src/services/h1Strategy.service';
+import { signalCenterService } from 'src/services/signalCenter.service';
+import { getSocket } from 'src/services/socket.service';
 import { Capacitor } from '@capacitor/core';
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -15,6 +17,35 @@ let notifPermissionGranted = false;
 let notifIdCounter = 1000;
 const H1_ALERT_ALLOWED_EMAIL = 'weimarsuber@gmail.com';
 const H1_EVALUATION_MINUTES = [13, 28, 43, 58];
+let signalCenterSocket = null;
+let signalCenterSocketHandler = null;
+
+function getSignalCenterStorageKey(kind) {
+  let identity = 'default';
+  try {
+    const authStore = useAuthStore();
+    identity = authStore.user?.id || authStore.user?.email || 'default';
+  } catch (e) {}
+  return `signal_center_${kind}_${identity}`;
+}
+
+function readStoredCenterIds(kind) {
+  try {
+    const value = JSON.parse(localStorage.getItem(getSignalCenterStorageKey(kind)) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeStoredCenterIds(kind, ids) {
+  try {
+    localStorage.setItem(
+      getSignalCenterStorageKey(kind),
+      JSON.stringify([...new Set(ids)].slice(-500)),
+    );
+  } catch (e) {}
+}
 
 function isScheduledSignalType(type = '') {
   return type === 'H1_NO_WICK'
@@ -339,6 +370,7 @@ export const useAlertsStore = defineStore('alerts', {
     crashBoomEvaluationStates: {},
     lastPreSpikeEvaluationKey: null,
     preSpikeEvaluationInFlight: false,
+    signalCenterSyncInFlight: false,
     pollingTimer: null,
     isInitialized: false,
   }),
@@ -371,6 +403,11 @@ export const useAlertsStore = defineStore('alerts', {
     },
 
     clearAlerts() {
+      const dismissed = readStoredCenterIds('dismissed');
+      const backendIds = this.alerts
+        .map((alert) => alert.backendId)
+        .filter(Boolean);
+      writeStoredCenterIds('dismissed', [...dismissed, ...backendIds]);
       this.alerts = [];
     },
 
@@ -507,31 +544,53 @@ export const useAlertsStore = defineStore('alerts', {
       dedupeKey,
       playChime = true,
       toneType = 'radar',
+      id,
+      backendId,
+      createdAt,
+      read = false,
+      bypassPreferences = false,
     }) {
       // ── FILTRADO POR PARAMETRIZACIÓN DINÁMICA DEL USUARIO ──
-      try {
-        const authStore = useAuthStore();
-        const prefs = authStore.strategyPreferences;
-        if (type && type.startsWith('H1_') && !isAllowedH1AlertUser(authStore)) return;
-        if (type && type.startsWith('H1_') && !prefs.h1NoWick) return;
-        if (type && type.startsWith('DOUBLE_WICK') && !prefs.doubleWick) return;
-        if (type && (type.includes('CRASH_') || type.includes('BOOM_') || type === 'OB_EN_ZONA' || type === 'CONFIRMACION_ZONA') && !prefs.crashBoomIa) return;
-        if (type === 'HIGH_STARS_SIGNAL' && !prefs.weySignals) return;
-        if (type && (type === 'SPIKE_DETECTED' || type.includes('SPIKE')) && !prefs.spikePatterns) return;
-      } catch (e) {}
+      if (!bypassPreferences) {
+        try {
+          const authStore = useAuthStore();
+          const prefs = authStore.strategyPreferences;
+          if (type && type.startsWith('H1_') && !isAllowedH1AlertUser(authStore)) return;
+          if (type && type.startsWith('H1_') && !prefs.h1NoWick) return;
+          if (type && type.startsWith('DOUBLE_WICK') && !prefs.doubleWick) return;
+          if (type && (type.includes('CRASH_') || type.includes('BOOM_') || type === 'OB_EN_ZONA' || type === 'CONFIRMACION_ZONA') && !prefs.crashBoomIa) return;
+          if (type === 'HIGH_STARS_SIGNAL' && !prefs.weySignals) return;
+          if (type && (type === 'SPIKE_DETECTED' || type.includes('SPIKE')) && !prefs.spikePatterns) return;
+        } catch (e) {}
+      }
 
       const cooldownMs = 120_000; // 2 minutos de enfriamiento
       const key = dedupeKey || `${symbol}_${type}`;
       const now = Date.now();
+
+      if (
+        !bypassPreferences &&
+        this.alerts.some((alert) =>
+          alert.backendId &&
+          alert.type === type &&
+          alert.symbol === symbol &&
+          now - (alert.createdAtEpoch || 0) <= 5 * 60_000,
+        )
+      ) {
+        return;
+      }
 
       if (this.lastAlertTimestamps[key] && now - this.lastAlertTimestamps[key] < cooldownMs) {
         return;
       }
 
       this.lastAlertTimestamps[key] = now;
+      const createdAtEpoch = createdAt ? new Date(createdAt).getTime() : now;
+      const safeCreatedAtEpoch = Number.isFinite(createdAtEpoch) ? createdAtEpoch : now;
 
       const newAlert = {
-        id: `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        id: id || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        backendId: backendId || null,
         type,
         symbol,
         title,
@@ -540,8 +599,9 @@ export const useAlertsStore = defineStore('alerts', {
         targetPath: targetPath || '/crash-ia',
         routeQuery: routeQuery || { symbol },
         severity,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        read: false,
+        time: new Date(safeCreatedAtEpoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAtEpoch: safeCreatedAtEpoch,
+        read,
       };
 
       this.alerts.unshift(newAlert);
@@ -572,6 +632,88 @@ export const useAlertsStore = defineStore('alerts', {
         setTimeout(() => {
           this.speakVoice(speechText);
         }, 350);
+      }
+    },
+
+    ingestSignalCenterAlerts(items, live = false) {
+      if (!Array.isArray(items) || !items.length) return;
+
+      const delivered = new Set(readStoredCenterIds('delivered'));
+      const dismissed = new Set(readStoredCenterIds('dismissed'));
+      const existingBackendIds = new Set(
+        this.alerts.map((alert) => alert.backendId).filter(Boolean),
+      );
+      const ordered = [...items]
+        .filter((item) => item?.id && !dismissed.has(item.id))
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      const now = Date.now();
+      const newestFreshUnseen = [...ordered]
+        .reverse()
+        .find((item) =>
+          !delivered.has(item.id) &&
+          now - new Date(item.createdAt).getTime() <= 5 * 60_000,
+        );
+
+      for (const item of ordered) {
+        if (existingBackendIds.has(item.id)) continue;
+
+        const createdAtEpoch = new Date(item.createdAt).getTime();
+        const wasDelivered = delivered.has(item.id);
+        const localDuplicate = this.alerts.find((alert) =>
+          !alert.backendId &&
+          alert.type === item.type &&
+          alert.symbol === item.symbol &&
+          Math.abs((alert.createdAtEpoch || 0) - createdAtEpoch) <= 5 * 60_000,
+        );
+
+        if (localDuplicate) {
+          localDuplicate.backendId = item.id;
+          localDuplicate.title = item.title;
+          localDuplicate.message = item.message;
+          localDuplicate.targetPath = item.targetPath;
+          localDuplicate.routeQuery = item.routeQuery || {};
+          localDuplicate.severity = item.severity;
+          existingBackendIds.add(item.id);
+          delivered.add(item.id);
+          continue;
+        }
+
+        const shouldAnnounce = !wasDelivered && newestFreshUnseen?.id === item.id;
+        this.triggerNotification({
+          id: `center_${item.id}`,
+          backendId: item.id,
+          type: item.type,
+          symbol: item.symbol || 'GENERAL',
+          title: item.title,
+          message: item.message,
+          speechText: shouldAnnounce ? item.speechText : null,
+          targetPath: item.targetPath || '/dashboard',
+          routeQuery: item.routeQuery || {},
+          severity: item.severity || 'warning',
+          dedupeKey: `SIGNAL_CENTER_${item.id}`,
+          playChime: shouldAnnounce || (live && !wasDelivered),
+          toneType: item.type?.includes('CONFIRMED') ? 'trade' : 'radar',
+          createdAt: item.createdAt,
+          read: wasDelivered,
+          bypassPreferences: true,
+        });
+        existingBackendIds.add(item.id);
+        delivered.add(item.id);
+      }
+
+      writeStoredCenterIds('delivered', [...delivered]);
+    },
+
+    async syncSignalCenterAlerts() {
+      if (this.signalCenterSyncInFlight) return;
+      this.signalCenterSyncInFlight = true;
+      try {
+        const items = await signalCenterService.list(60);
+        this.ingestSignalCenterAlerts(items, false);
+      } catch (e) {
+        // El radar local sigue funcionando aunque la bandeja persistente no responda.
+      } finally {
+        this.signalCenterSyncInFlight = false;
       }
     },
 
@@ -709,6 +851,7 @@ export const useAlertsStore = defineStore('alerts', {
      */
     async pollOpportunities() {
       try {
+        await this.syncSignalCenterAlerts();
         const authStore = useAuthStore();
         const prefs = authStore.strategyPreferences;
 
@@ -829,6 +972,13 @@ export const useAlertsStore = defineStore('alerts', {
       if (this.isInitialized) return;
       this.isInitialized = true;
 
+      try {
+        signalCenterSocket = getSocket();
+        signalCenterSocketHandler = (alert) => this.ingestSignalCenterAlerts([alert], true);
+        signalCenterSocket.off('signal-center.alert');
+        signalCenterSocket.on('signal-center.alert', signalCenterSocketHandler);
+      } catch (e) {}
+
       // Solicitar permisos de notificación nativa al arrancar (antes de que llegue la primera alerta)
       try {
         await ensureNativeNotifReady();
@@ -880,6 +1030,12 @@ export const useAlertsStore = defineStore('alerts', {
       }
       this.isInitialized = false;
       this.crashBoomEvaluationStates = {};
+
+      if (signalCenterSocket && signalCenterSocketHandler) {
+        signalCenterSocket.off('signal-center.alert', signalCenterSocketHandler);
+      }
+      signalCenterSocket = null;
+      signalCenterSocketHandler = null;
 
       try {
         if (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform()) {

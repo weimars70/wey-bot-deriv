@@ -82,8 +82,8 @@ export class TradingBotService implements OnModuleInit {
   private h1EvaluationInFlight = false;
   private lastH1AnalysisAt = 0;
   private lastDashboardEvaluationMinuteKey = -1;
-  private lastCrashBoomWhatsAppMinuteKey = -1;
-  private crashBoomWhatsAppInFlight = false;
+  private lastCrashBoomAlertMinuteKey = -1;
+  private crashBoomAlertInFlight = false;
 
   constructor(
     @InjectRepository(TradeRecord)
@@ -647,25 +647,22 @@ export class TradingBotService implements OnModuleInit {
     // El autotrade conserva su regla independiente de usuario online.
     if (
       isScheduledWindow &&
-      this.lastCrashBoomWhatsAppMinuteKey !== minuteKey &&
-      !this.crashBoomWhatsAppInFlight
+      this.lastCrashBoomAlertMinuteKey !== minuteKey &&
+      !this.crashBoomAlertInFlight
     ) {
-      this.lastCrashBoomWhatsAppMinuteKey = minuteKey;
-      this.crashBoomWhatsAppInFlight = true;
+      this.lastCrashBoomAlertMinuteKey = minuteKey;
+      this.crashBoomAlertInFlight = true;
       try {
         await this.evaluateScheduledCrashBoomAlerts(minuteKey);
       } catch (error: any) {
-        this.logger.error(`Error enviando radar Crash/Boom por WhatsApp: ${error?.message || error}`);
+        this.logger.error(`Error publicando radar Crash/Boom: ${error?.message || error}`);
       } finally {
-        this.crashBoomWhatsAppInFlight = false;
+        this.crashBoomAlertInFlight = false;
       }
     }
 
     // ── REGLA CRÍTICA USUARIO: Si weimarsuber@gmail.com no está logueado en la app, NO hacer autotrade ──
     const isUserOnline = await this.isUserAuthorizedOnline();
-    if (!isUserOnline) {
-      return;
-    }
 
     // A. Evaluación Estrategia H1 Sin Mecha (Velas Marubozu)
     // H1 es una señal directa y no depende del cupo global de las otras estrategias.
@@ -684,11 +681,13 @@ export class TradingBotService implements OnModuleInit {
       this.lastH1AnalysisAt = Date.now();
       this.h1EvaluationInFlight = true;
       try {
-        await this.evaluateH1Strategy(this.h1AutoEnabled);
+        await this.evaluateH1Strategy(this.h1AutoEnabled && isUserOnline);
       } finally {
         this.h1EvaluationInFlight = false;
       }
     }
+
+    if (!isUserOnline) return;
 
     if (this.dashboardStarsAutoEnabled && shouldEvaluateDashboard) {
       this.lastDashboardEvaluationMinuteKey = minuteKey;

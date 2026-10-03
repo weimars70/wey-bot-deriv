@@ -6,6 +6,7 @@ import { AccountSnapshot } from '../account/account.entity';
 import { User } from '../users/user.entity';
 import { TradeRecord } from '../trading/trade.entity';
 import { WatchedEntryLevel } from '../watched-levels/watched-level.entity';
+import { SignalCenterAlert } from '../notifications/signal-center-alert.entity';
 
 export default registerAs(
   'database',
@@ -16,7 +17,7 @@ export default registerAs(
     username: process.env.DB_USERNAME || 'deriv_user',
     password: process.env.DB_PASSWORD || 'deriv_pass',
     database: process.env.DB_DATABASE || 'deriv_db',
-    entities: [Tick, Candle, AccountSnapshot, User, TradeRecord, WatchedEntryLevel],
+    entities: [Tick, Candle, AccountSnapshot, User, TradeRecord, WatchedEntryLevel, SignalCenterAlert],
     // Tablas y columnas ya sincronizadas en BD; false evita conflictos de schema y bloqueos
     synchronize: false,
     logging: false,
