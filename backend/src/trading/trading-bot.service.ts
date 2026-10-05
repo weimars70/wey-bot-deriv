@@ -21,7 +21,7 @@ export class TradingBotService implements OnModuleInit {
 
   // Configuraciones del Bot
   private h1AutoEnabled = true;
-  private dashboardStarsAutoEnabled = false; // Solo autotrade para H1 y puntos de watched_entry_levels
+  private dashboardStarsAutoEnabled = true;
   private crashBoomAutoEnabled = false;
   private m5PlusAutoEnabled = false; // M5++ auto-trading (desactivado por defecto, activar desde el panel)
   private m5XAutoEnabled = false;
@@ -222,6 +222,7 @@ export class TradingBotService implements OnModuleInit {
   getConfig() {
     return {
       h1AutoEnabled: this.h1AutoEnabled,
+      dashboardStarsAutoEnabled: this.dashboardStarsAutoEnabled,
       crashBoomAutoEnabled: this.crashBoomAutoEnabled,
       m5PlusAutoEnabled: this.m5PlusAutoEnabled,
       m5XAutoEnabled: this.m5XAutoEnabled,
@@ -946,37 +947,15 @@ export class TradingBotService implements OnModuleInit {
       if (!(await this.isH1AutoTradingAllowed())) return;
       if (this.activeTradesMap.size >= this.maxOpenTrades) return;
 
-      const comparison = await this.weySignalsService.compare();
-      const candidates = comparison.rows.flatMap((row) => {
-        const signals = [
-          row.wey && row.wey.viable
-            ? {
-                source: 'WEY',
-                stars: Number(row.wey.estrellas),
-                direction: row.wey.direccion,
-                entry: Number(row.wey.entrada),
-                stopLoss: Number(row.wey.sl),
-                mercado: row.wey.mercado || row.symbol,
-              }
-            : null,
-          row.apex
-            ? {
-                source: 'APEX',
-                stars: Number(row.apex.estrellas),
-                direction: row.apex.direccion,
-                entry: Number(row.apex.entrada),
-                stopLoss: Number(row.apex.sl),
-                mercado: row.apex.mercado || row.symbol,
-              }
-            : null,
-        ].filter((signal): signal is NonNullable<typeof signal> => Boolean(signal));
-
-        return signals
-          .filter((signal) => signal.stars >= 4)
-          .sort((a, b) => b.stars - a.stars || (a.source === 'WEY' ? -1 : 1))
-          .slice(0, 1)
-          .map((signal) => ({ ...signal, symbol: row.symbol }));
-      });
+      const { signals } = await this.weySignalsService.getSignals(4, true);
+      const candidates = signals.map((signal) => ({
+        stars: Number(signal.estrellas),
+        direction: signal.direccion,
+        entry: Number(signal.entrada),
+        stopLoss: Number(signal.sl),
+        mercado: signal.mercado || signal.symbol,
+        symbol: signal.symbol,
+      }));
 
       for (const signal of candidates) {
         const symbol = signal.symbol.toUpperCase();
@@ -1004,7 +983,7 @@ export class TradingBotService implements OnModuleInit {
         if (openedTrade) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `⭐ [DASHBOARD 4★+] ${signal.source} ${symbol} ${direction} (${signal.stars}★) enviado a MT5.`,
+            `⭐ [DASHBOARD 4★+] WEY ${symbol} ${direction} (${signal.stars}★) enviado a MT5.`,
           );
         }
       }

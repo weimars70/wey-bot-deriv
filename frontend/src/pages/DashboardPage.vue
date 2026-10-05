@@ -1,138 +1,5 @@
 <template>
   <q-page class="q-pa-md dashboard-page">
-
-    <!-- ════════════════════════════════════════════════════════════════════ -->
-    <!-- ── 1. BOTOLD — Sala de Operaciones (Referencia) ───────────────────── -->
-    <!-- ════════════════════════════════════════════════════════════════════ -->
-    <div class="section-header q-mb-md row items-center justify-between">
-      <div class="row items-center q-gutter-sm">
-        <span class="live-pulse-dot apex-pulse" :class="{ active: apexSessionActive }" />
-        <div>
-          <div class="apex-title">
-            🔥 BotOld · Sala de Operaciones
-          </div>
-          <div class="section-sub">
-            Señales BotOld · cuenta 41116831
-            <span v-if="apexLastUpdated" class="q-ml-xs">
-              · actualizado {{ apexTimeAgo }}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div class="row items-center q-gutter-xs">
-        <q-btn
-          flat dense round
-          icon="refresh"
-          color="orange-6"
-          :loading="apexSignals.loading.value"
-          @click="onRefreshApex"
-        >
-          <q-tooltip>Actualizar señales BotOld</q-tooltip>
-        </q-btn>
-        <q-btn
-          flat dense round
-          icon="sync_alt"
-          color="amber-9"
-          :loading="relevoLoading"
-          @click="onForzarRelevo"
-        >
-          <q-tooltip>Reconectar / Forzar relevo de sesión BotOld</q-tooltip>
-        </q-btn>
-      </div>
-    </div>
-
-    <!-- Banner de sesión BotOld inactiva / reconexión -->
-    <div
-      v-if="!apexSessionActive"
-      class="apex-offline-box q-pa-sm q-px-md q-mb-md row items-center justify-between"
-    >
-      <div class="row items-center q-gutter-sm text-amber-9">
-        <q-icon name="wifi_off" size="20px" color="amber-9" />
-        <div>
-          <div class="text-caption text-weight-bold">
-            Sesión BotOld inactiva en este servidor
-          </div>
-          <div class="text-caption text-slate-600" style="font-size: 11px;">
-            {{ apexLastError || 'La cuenta 41116831 requiere inicio de sesión o relevo con la huella registrada.' }}
-          </div>
-        </div>
-      </div>
-      <div class="row items-center q-gutter-xs q-mt-xs-sm">
-        <q-btn
-          unelevated
-          dense
-          size="sm"
-          color="orange-8"
-          icon="sync"
-          label="Conectar / Forzar Relevo"
-          class="q-px-sm"
-          :loading="relevoLoading"
-          @click="onForzarRelevo"
-        >
-          <q-tooltip>Toma el control de la sesión para este servidor</q-tooltip>
-        </q-btn>
-        <q-btn
-          flat
-          dense
-          size="sm"
-          color="slate-700"
-          icon="key"
-          label="Token Manual"
-          @click="showTokenDialog = true"
-        />
-      </div>
-    </div>
-
-    <!-- Diálogo para token manual -->
-    <q-dialog v-model="showTokenDialog">
-      <q-card style="min-width: 360px">
-        <q-card-section>
-          <div class="text-subtitle1 text-weight-bold">Token de Sesión BotOld</div>
-          <div class="text-caption text-slate-500">Pega el token X-Sesion activo de ApexFusion</div>
-        </q-card-section>
-        <q-card-section class="q-pt-none">
-          <q-input dense v-model="tokenInput" autofocus placeholder="Ej: e08169c7157d766e6cdff152a2fbaa36..." />
-        </q-card-section>
-        <q-card-actions align="right">
-          <q-btn flat label="Cancelar" v-close-popup />
-          <q-btn unelevated color="orange-8" label="Guardar y Validar" @click="onGuardarToken" />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
-
-    <!-- Apex loading skeletons -->
-    <div v-if="apexSignals.loading.value" class="row q-col-gutter-md q-mb-xl">
-      <div v-for="i in 4" :key="i" class="col-12 col-sm-6 col-lg-3">
-        <q-skeleton type="rect" height="175px" style="border-radius:12px;" />
-      </div>
-    </div>
-
-    <!-- Apex empty state -->
-    <div
-      v-else-if="!apexList.length"
-      class="empty-box q-pa-lg text-center q-mb-xl"
-    >
-      <q-icon name="signal_wifi_off" size="36px" color="grey-5" />
-      <div class="q-mt-sm text-caption text-slate-500">
-        Sin señales activas de BotOld en este momento (mínimo 3★).
-      </div>
-    </div>
-
-    <!-- Apex signal cards grid -->
-    <div v-else class="row q-col-gutter-md q-mb-xl">
-      <div
-        v-for="(s, i) in apexList"
-        :key="i"
-        class="col-12 col-sm-6 col-lg-3"
-      >
-        <ApexSignalCard :signal="s" />
-      </div>
-    </div>
-
-    <!-- ════════════════════════════════════════════════════════════════════ -->
-    <!-- ── 2. WEY TRADING — Sala de Operaciones Local ────────────────────── -->
-    <!-- ════════════════════════════════════════════════════════════════════ -->
     <div class="section-header wey-section-header q-mb-md row items-center justify-between">
       <div class="row items-center q-gutter-sm">
         <span class="live-pulse-dot wey-pulse active" />
@@ -188,7 +55,7 @@
           dense
           class="q-px-sm"
           :loading="weyLoading"
-          @click="loadWeySignals(true)"
+          @click="loadWeySignals"
         />
 
         <q-btn
@@ -202,16 +69,6 @@
           <q-tooltip>Abrir monitor de velas H1 sin mecha y alertas</q-tooltip>
         </q-btn>
 
-        <q-btn
-          flat
-          dense
-          color="primary"
-          icon="compare_arrows"
-          label="Comparador Wey vs BotOld"
-          to="/comparison"
-        >
-          <q-tooltip>Abrir comparativa lado a lado</q-tooltip>
-        </q-btn>
       </div>
     </div>
 
@@ -267,133 +124,16 @@
       </div>
     </div>
 
-    <!-- ════════════════════════════════════════════════════════════════════ -->
-    <!-- ── 3. RESUMEN COMPARATIVO: WEY VS BOTOLD ────────────────────────── -->
-    <!-- ════════════════════════════════════════════════════════════════════ -->
-    <div class="comparison-summary-header q-mb-md row items-center justify-between">
-      <div class="row items-center q-gutter-xs">
-        <q-icon name="analytics" size="20px" color="slate-700" />
-        <span class="text-subtitle2 text-weight-bold text-slate-800">
-          Resumen de Coincidencia: Wey (Local) vs BotOld
-        </span>
-      </div>
-      <div class="text-caption text-slate-500">
-        {{ weySignalsList.length }} señales locales activas ({{ onlyThreeStars ? '≥3★' : 'todas' }}, {{ onlyViable ? 'solo viables' : 'todas' }})
-      </div>
-    </div>
-
-    <div class="row q-col-gutter-md q-mb-lg">
-      <div class="col-12 col-sm-6 col-md-3">
-        <div class="kpi-box">
-          <div class="kpi-num text-primary">{{ compSummary.total || 0 }}</div>
-          <div class="kpi-lbl">Índices Evaluados</div>
-        </div>
-      </div>
-      <div class="col-12 col-sm-6 col-md-3">
-        <div class="kpi-box">
-          <div class="kpi-num text-purple-8">{{ compSummary.withApex || 0 }}</div>
-          <div class="kpi-lbl">Con Señal en BotOld</div>
-        </div>
-      </div>
-      <div class="col-12 col-sm-6 col-md-3">
-        <div class="kpi-box">
-          <div class="kpi-num text-green-7">{{ compSummary.directionMatches || 0 }}</div>
-          <div class="kpi-lbl">Dirección Coincidente</div>
-        </div>
-      </div>
-      <div class="col-12 col-sm-6 col-md-3">
-        <div class="kpi-box">
-          <div class="kpi-num text-amber-8">{{ compSummary.viableCount ?? 0 }}</div>
-          <div class="kpi-lbl">Señales Viables Hoy</div>
-        </div>
-      </div>
-    </div>
-
   </q-page>
 </template>
 
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue';
-import { useQuasar } from 'quasar';
-import { usePolling } from 'src/composables/usePolling';
-import { apexSignalsService } from 'src/services/apexSignals.service';
 import { weySignalsService } from 'src/services/weySignals.service';
-import ApexSignalCard from 'src/components/ApexSignalCard.vue';
 import WeySignalCard from 'src/components/WeySignalCard.vue';
 
-const $q = useQuasar();
-
-// ── 1. ApexFusion polling (cada 5 min) ───────────────────────────────────────
-const apexSignals = usePolling(() => apexSignalsService.getSignals(), 5 * 60_000);
-
-const apexList = computed(() => {
-  const data = apexSignals.data.value;
-  if (!data || !Array.isArray(data.signals)) return [];
-  // Solo señales con 3 o más estrellas ordenadas por estrellas desc
-  return data.signals
-    .filter((s) => (s.estrellas ?? 0) >= 3)
-    .sort((a, b) => (b.estrellas ?? 0) - (a.estrellas ?? 0) || (b.rb ?? 0) - (a.rb ?? 0));
-});
-
-const apexLastUpdated   = computed(() => apexSignals.data.value?.lastUpdated ?? null);
-const apexSessionActive = computed(() => apexSignals.data.value?.sessionActive ?? false);
-const apexLastError     = computed(() => apexSignals.data.value?.lastError ?? null);
-const relevoLoading     = ref(false);
-const tokenInput        = ref('');
-const showTokenDialog   = ref(false);
-
-async function onForzarRelevo() {
-  relevoLoading.value = true;
-  try {
-    const res = await apexSignalsService.login(true, '41116831');
-    if (res?.ok) {
-      $q.notify({ type: 'positive', message: 'Sesión BotOld conectada con éxito' });
-      await apexSignals.refresh();
-      await loadWeySignals(true);
-    } else {
-      $q.notify({ type: 'negative', message: res?.message || 'Error al conectar con ApexFusion' });
-    }
-  } catch (err) {
-    $q.notify({ type: 'negative', message: err?.message || 'Error de conexión' });
-  } finally {
-    relevoLoading.value = false;
-  }
-}
-
-async function onGuardarToken() {
-  if (!tokenInput.value) return;
-  try {
-    const res = await apexSignalsService.setSession(tokenInput.value.trim());
-    if (res?.ok) {
-      $q.notify({ type: 'positive', message: 'Token guardado y validado correctamente' });
-      showTokenDialog.value = false;
-      await apexSignals.refresh();
-      await loadWeySignals(true);
-    } else {
-      $q.notify({ type: 'negative', message: res?.message || 'Token rechazado por ApexFusion' });
-    }
-  } catch (err) {
-    $q.notify({ type: 'negative', message: err?.message || 'Error al guardar token' });
-  }
-}
-
-const apexTimeAgo = computed(() => {
-  const ts = apexLastUpdated.value;
-  if (!ts) return '';
-  const diff = Date.now() - new Date(ts).getTime();
-  const sec  = Math.floor(diff / 1000);
-  if (sec < 60)  return `hace ${sec}s`;
-  return `hace ${Math.floor(sec / 60)}m`;
-});
-
-function onRefreshApex() {
-  apexSignals.refresh();
-}
-
-// ── 2. Wey Signals (Motor Local) ────────────────────────────────────────────
 const weyLoading        = ref(false);
 const rawWeySignals     = ref([]);
-const compSummary       = ref({ total: 0, withApex: 0, directionMatches: 0, strongMatches: 0, viableCount: 0 });
 const lastWeyUpdate     = ref(null);
 const onlyThreeStars    = ref(true);
 const onlyViable        = ref(true);
@@ -416,7 +156,7 @@ function updateCountdown() {
     const evaluationKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${minutes}`;
     if (lastScheduledEvaluationKey !== evaluationKey) {
       lastScheduledEvaluationKey = evaluationKey;
-      loadWeySignals(true);
+      loadWeySignals();
     }
   }
 
@@ -458,16 +198,13 @@ const weySignalsList = computed(() => {
   });
 });
 
-async function loadWeySignals(force = false) {
+async function loadWeySignals() {
   weyLoading.value = true;
   try {
-    const res = await weySignalsService.getComparison(force);
-    if (res && res.rows) {
-      rawWeySignals.value = res.rows
-        .map((r) => r.wey)
-        .filter((w) => w !== null);
-      compSummary.value   = res.summary || {};
-      lastWeyUpdate.value = res.summary?.computedAt || new Date().toISOString();
+    const res = await weySignalsService.getSignals(0, false);
+    if (res && Array.isArray(res.signals)) {
+      rawWeySignals.value = res.signals;
+      lastWeyUpdate.value = res.lastUpdated || new Date().toISOString();
     }
   } catch (err) {
     console.error('Error al cargar señales Wey:', err);
@@ -510,18 +247,6 @@ onUnmounted(() => {
   padding-top:   24px;
 }
 
-.comparison-summary-header {
-  border-top:    1px solid #e2e8f0;
-  padding-top:   20px;
-}
-
-.apex-title {
-  font-size:      17px;
-  font-weight:    800;
-  color:          #d97706;
-  letter-spacing: 0.3px;
-}
-
 .wey-title {
   font-size:      17px;
   font-weight:    800;
@@ -556,22 +281,10 @@ onUnmounted(() => {
   transition:    background 0.3s;
 }
 
-.apex-pulse.active {
-  background: #f59e0b;
-  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6);
-  animation:  apex-pulse-anim 2s ease-in-out infinite;
-}
-
 .wey-pulse.active {
   background: #6366f1;
   box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6);
   animation:  wey-pulse-anim 2s ease-in-out infinite;
-}
-
-@keyframes apex-pulse-anim {
-  0%   { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
-  70%  { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
 }
 
 @keyframes wey-pulse-anim {
@@ -586,35 +299,10 @@ onUnmounted(() => {
   border-radius: 12px;
 }
 
-.kpi-box {
-  background:    #ffffff;
-  border:        1px solid #e2e8f0;
-  border-radius: 10px;
-  padding:       12px 16px;
-  text-align:    center;
-}
-
-.kpi-num {
-  font-size:   24px;
-  font-weight: 800;
-  line-height: 1.1;
-}
-
-.kpi-lbl {
-  font-size:  11px;
-  color:      #64748b;
-  margin-top: 2px;
-}
-
 .evaluation-clock-pill {
   background: #ede9fe;
   border: 1px solid #c4b5fd;
   border-radius: 8px;
 }
 
-.apex-offline-box {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 10px;
-}
 </style>

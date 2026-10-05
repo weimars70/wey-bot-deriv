@@ -349,39 +349,22 @@ export class CrashIaStrategyService {
       m5Viability.reason = retestInfo.reason;
     } else if (retestInfo.isInRetest && retestInfo.isReadyForEntry) {
       m5Viability.reason = retestInfo.reason;
-      m5Viability.isViable = true;
     }
-
-    const repeatedReaction = this.detectRepeatedM5Reaction(
-      m5Candles,
-      sym,
-      isBoom,
-      currentPrice,
-      boxFloor,
-      boxCeiling,
-      entryLevel50,
-      retestInfo.isInRetest && !retestInfo.isReadyForEntry,
-    );
 
     const canSell =
       !isBoom &&
-      status !== 'EN_RETESTEO' &&
-      (
-        (status === 'EN_ZONA_50' && trendOk && greenOk && m5Viability.isViable) ||
-        (repeatedReaction.isDetected && trendOk && greenOk && repeatedReaction.zoneDistance <= Math.max(10, this.getDefaultM5Height(sym) * 2))
-      );
+      status === 'EN_ZONA_50' &&
+      trendOk &&
+      rsiOk &&
+      greenOk &&
+      m5Viability.isViable;
     const canBuy =
       isBoom &&
-      status !== 'EN_RETESTEO' &&
-      (
-        (status === 'EN_ZONA_50' && trendOk && greenOk && m5Viability.isViable) ||
-        (repeatedReaction.isDetected && trendOk && greenOk && repeatedReaction.zoneDistance <= Math.max(10, this.getDefaultM5Height(sym) * 2))
-      );
-
-    if (repeatedReaction.isDetected && !retestInfo.isInRetest && (!m5Viability.isViable || m5Viability.reason.includes('no alcanza'))) {
-      m5Viability.reason = repeatedReaction.reason;
-      m5Viability.isViable = true;
-    }
+      status === 'EN_ZONA_50' &&
+      trendOk &&
+      rsiOk &&
+      greenOk &&
+      m5Viability.isViable;
 
     // 14. Velas a retornar para el gráfico según temporalidad solicitada
     const timeframeSeconds = (timeframeMinutes || 5) * 60;
@@ -870,53 +853,31 @@ export class CrashIaStrategyService {
   } {
     // 1. Prioridad: Order Block Institucional en M5
     if (activeOB && (activeOB.status === 'EN_ZONA' || activeOB.status === 'FRESCO')) {
-      if (isBoom) {
-        // En BOOM: La reacción alcista ocurre en el Order Block de soporte (abajo)
-        const targetReactionPrice = activeOB.mid50;
-        const tolerance = Math.max((activeOB.high - activeOB.low) * 0.4, 2.0);
-        const distToReaction = parseFloat((currentPrice - targetReactionPrice).toFixed(3));
+      const targetReactionPrice = activeOB.mid50;
+      const tolerance = Math.max((activeOB.high - activeOB.low) * 0.4, 2.0);
+      const distToReaction = parseFloat(
+        ((isBoom ? currentPrice - targetReactionPrice : targetReactionPrice - currentPrice)).toFixed(3),
+      );
+      const priceInZone = currentPrice >= activeOB.low - tolerance
+        && currentPrice <= activeOB.high + tolerance;
+      const reversalConfirmed = this.hasClosedM5Reversal(
+        m5Candles,
+        isBoom,
+        activeOB.low - tolerance,
+        activeOB.high + tolerance,
+      );
 
-        if (currentPrice <= activeOB.high + tolerance) {
-          return {
-            isViable: true,
-            reason: `En M5 el precio está en zona óptima de Order Block (${activeOB.low} - ${activeOB.high})`,
-            targetReactionPrice,
-            distToReaction,
-            reactionType: 'ORDER_BLOCK_M5',
-          };
-        } else {
-          return {
-            isViable: false,
-            reason: `En TF M5 le falta retroceso al Order Block/Soporte (${targetReactionPrice}). Distancia restante: ${distToReaction} pts`,
-            targetReactionPrice,
-            distToReaction,
-            reactionType: 'ORDER_BLOCK_M5',
-          };
-        }
-      } else {
-        // En CRASH: La reacción bajista ocurre en el Order Block de resistencia (arriba)
-        const targetReactionPrice = activeOB.mid50;
-        const tolerance = Math.max((activeOB.high - activeOB.low) * 0.4, 2.0);
-        const distToReaction = parseFloat((targetReactionPrice - currentPrice).toFixed(3));
-
-        if (currentPrice >= activeOB.low - tolerance) {
-          return {
-            isViable: true,
-            reason: `En M5 el precio está en zona óptima de Order Block (${activeOB.low} - ${activeOB.high})`,
-            targetReactionPrice,
-            distToReaction,
-            reactionType: 'ORDER_BLOCK_M5',
-          };
-        } else {
-          return {
-            isViable: false,
-            reason: `En TF M5 le falta subida al Order Block/Resistencia (${targetReactionPrice}). Distancia restante: ${distToReaction} pts`,
-            targetReactionPrice,
-            distToReaction,
-            reactionType: 'ORDER_BLOCK_M5',
-          };
-        }
-      }
+      return {
+        isViable: priceInZone && reversalConfirmed,
+        reason: !priceInZone
+          ? `En M5 el precio está fuera del Order Block (${activeOB.low} - ${activeOB.high})`
+          : reversalConfirmed
+          ? `En M5 el precio rechazó al alza el Order Block (${activeOB.low} - ${activeOB.high})`
+          : `En M5 esperar cierre de rechazo ${isBoom ? 'alcista' : 'bajista'} en el Order Block (${activeOB.low} - ${activeOB.high})`,
+        targetReactionPrice,
+        distToReaction,
+        reactionType: 'ORDER_BLOCK_M5',
+      };
     }
 
     // 2. Si no hay OB activo, buscar el soporte/resistencia estructural de los últimos spikes M5
@@ -936,10 +897,17 @@ export class CrashIaStrategyService {
             (spikeBases.reduce((a, b) => a + b, 0) / spikeBases.length).toFixed(3),
           );
           const distToReaction = parseFloat((currentPrice - targetReactionPrice).toFixed(3));
-          if (distToReaction <= 3.5) {
+          const nearSupport = Math.abs(distToReaction) <= 3.5;
+          const reversalConfirmed = this.hasClosedM5Reversal(
+            m5Candles,
+            true,
+            targetReactionPrice - 3.5,
+            targetReactionPrice + 3.5,
+          );
+          if (nearSupport && reversalConfirmed) {
             return {
               isViable: true,
-              reason: `En M5 el precio está en soporte estructural de spikes (${targetReactionPrice})`,
+              reason: `En M5 el precio rechazó al alza el soporte estructural (${targetReactionPrice})`,
               targetReactionPrice,
               distToReaction,
               reactionType: 'SOPORTE_ESTRUCTURAL_M5',
@@ -947,7 +915,9 @@ export class CrashIaStrategyService {
           } else {
             return {
               isViable: false,
-              reason: `En TF M5 el precio está muy arriba (${currentPrice}); los spikes nacen cerca de ${targetReactionPrice} (faltan ${distToReaction} pts)`,
+              reason: nearSupport
+                ? `En M5 esperar cierre de rechazo alcista en soporte (${targetReactionPrice})`
+                : `En TF M5 el precio está lejos del soporte estructural (${targetReactionPrice}; distancia ${distToReaction} pts)`,
               targetReactionPrice,
               distToReaction,
               reactionType: 'SOPORTE_ESTRUCTURAL_M5',
@@ -969,10 +939,17 @@ export class CrashIaStrategyService {
             (spikeTops.reduce((a, b) => a + b, 0) / spikeTops.length).toFixed(3),
           );
           const distToReaction = parseFloat((targetReactionPrice - currentPrice).toFixed(3));
-          if (distToReaction <= 3.5) {
+          const nearResistance = Math.abs(distToReaction) <= 3.5;
+          const reversalConfirmed = this.hasClosedM5Reversal(
+            m5Candles,
+            false,
+            targetReactionPrice - 3.5,
+            targetReactionPrice + 3.5,
+          );
+          if (nearResistance && reversalConfirmed) {
             return {
               isViable: true,
-              reason: `En M5 el precio está en resistencia estructural de spikes (${targetReactionPrice})`,
+              reason: `En M5 el precio rechazó a la baja la resistencia estructural (${targetReactionPrice})`,
               targetReactionPrice,
               distToReaction,
               reactionType: 'RESISTENCIA_ESTRUCTURAL_M5',
@@ -980,7 +957,9 @@ export class CrashIaStrategyService {
           } else {
             return {
               isViable: false,
-              reason: `En TF M5 el precio está muy abajo (${currentPrice}); las caídas nacen cerca de ${targetReactionPrice} (faltan ${distToReaction} pts)`,
+              reason: nearResistance
+                ? `En M5 esperar cierre de rechazo bajista en resistencia (${targetReactionPrice})`
+                : `En TF M5 el precio está lejos de la resistencia estructural (${targetReactionPrice}; distancia ${distToReaction} pts)`,
               targetReactionPrice,
               distToReaction,
               reactionType: 'RESISTENCIA_ESTRUCTURAL_M5',
@@ -993,16 +972,46 @@ export class CrashIaStrategyService {
     // 3. Fallback: 50% de retroceso
     const targetReactionPrice = entryLevel50;
     const distToReaction = parseFloat(Math.abs(currentPrice - targetReactionPrice).toFixed(3));
-    const isViable = isBoom ? currentPrice <= entryLevel50 : currentPrice >= entryLevel50;
+    const priceInZone = isBoom ? currentPrice <= entryLevel50 : currentPrice >= entryLevel50;
+    const reversalConfirmed = this.hasClosedM5Reversal(
+      m5Candles,
+      isBoom,
+      entryLevel50 - 3.5,
+      entryLevel50 + 3.5,
+    );
+    const isViable = priceInZone && reversalConfirmed;
     return {
       isViable,
-      reason: isViable
-        ? `En M5 el precio alcanzó la zona del 50% (${targetReactionPrice})`
-        : `En TF M5 aún no alcanza la zona del 50% (${targetReactionPrice})`,
+      reason: !priceInZone
+        ? `En TF M5 aún no alcanza la zona del 50% (${targetReactionPrice})`
+        : reversalConfirmed
+        ? `En M5 el precio confirmó rechazo en la zona del 50% (${targetReactionPrice})`
+        : `En M5 esperar cierre de rechazo ${isBoom ? 'alcista' : 'bajista'} en la zona del 50% (${targetReactionPrice})`,
       targetReactionPrice,
       distToReaction,
       reactionType: 'RETROCESO_50_M5',
     };
+  }
+
+  private hasClosedM5Reversal(
+    m5Candles: any[],
+    isBoom: boolean,
+    zoneLow: number,
+    zoneHigh: number,
+  ): boolean {
+    if (!m5Candles || m5Candles.length < 3) return false;
+
+    const previous = m5Candles[m5Candles.length - 3];
+    const closed = m5Candles[m5Candles.length - 2];
+    const open = Number(closed.open);
+    const close = Number(closed.close);
+    const previousClose = Number(previous.close);
+    const touchedZone = Number(closed.low) <= zoneHigh && Number(closed.high) >= zoneLow;
+    const reversed = isBoom
+      ? close > open && close > previousClose
+      : close < open && close < previousClose;
+
+    return touchedZone && reversed;
   }
 
   /**
@@ -1552,82 +1561,6 @@ export class CrashIaStrategyService {
         reason,
       };
     }
-  }
-
-  /**
-   * Detecta si en M5 el mercado ya reaccionó varias veces a la misma zona de soporte/resistencia,
-   * lo que permite sugerir el trade incluso cuando la estructura no es un patrón V exacto.
-   * IMPORTANTE: No se activa si el mercado está en consolidación lateral / chop plano de retesteo.
-   */
-  private detectRepeatedM5Reaction(
-    m5Candles: any[],
-    symbol: string,
-    isBoom: boolean,
-    currentPrice: number,
-    boxFloor: number,
-    boxCeiling: number,
-    entryLevel50: number,
-    isInRetestChop = false,
-  ): { isDetected: boolean; reason: string; zoneDistance: number } {
-    if (isInRetestChop) {
-      return {
-        isDetected: false,
-        reason: 'El mercado se encuentra en zona de retesteo/consolidación lateral en M5; no se consideran reacciones repetidas en rango plano.',
-        zoneDistance: Number.MAX_SAFE_INTEGER,
-      };
-    }
-
-    if (!m5Candles || m5Candles.length < 12) {
-      return { isDetected: false, reason: 'Sin suficientes velas M5 para validar reacciones repetidas.', zoneDistance: Number.MAX_SAFE_INTEGER };
-    }
-
-    // Zona real de reacción del patrón actual, no un promedio global de toda la última ventana.
-    // Para CRASH la reacción que importa está en la zona superior (50% + techo de caja).
-    // Para BOOM está en la zona inferior (50% + piso de caja).
-    const reactionZone = isBoom
-      ? (boxFloor + entryLevel50) / 2
-      : (entryLevel50 + boxCeiling) / 2;
-    const tolerance = Math.max(2.0, this.getDefaultM5Height(symbol) * 1.5);
-    const window = m5Candles.slice(-30);
-
-    let touches = 0;
-    let lastTouchIdx = -10;
-    for (let i = 0; i < window.length; i++) {
-      const candle = window[i];
-      const low = Number(candle.low);
-      const high = Number(candle.high);
-      const close = Number(candle.close);
-
-      if (isBoom) {
-        // BOOM: rebotes en soporte con separación mínima de velas entre contactos
-        const insideZone = low <= reactionZone + tolerance && high >= reactionZone - tolerance;
-        const bounced = close >= reactionZone - tolerance;
-        if (insideZone && bounced && i - lastTouchIdx >= 2) {
-          touches++;
-          lastTouchIdx = i;
-        }
-      } else {
-        // CRASH: rechazos en resistencia con separación mínima de velas entre contactos
-        const insideZone = high >= reactionZone - tolerance && low <= reactionZone + tolerance;
-        const bounced = close <= reactionZone + tolerance;
-        if (insideZone && bounced && i - lastTouchIdx >= 2) {
-          touches++;
-          lastTouchIdx = i;
-        }
-      }
-    }
-
-    const zoneDistance = Math.abs(currentPrice - reactionZone);
-    const minTouches = isBoom ? 2 : 3;
-    const isDetected = touches >= minTouches && zoneDistance <= tolerance * 2.5;
-
-    return {
-      isDetected,
-      reason: isDetected
-        ? `El mercado ya reaccionó varias veces en M5 cerca de ${reactionZone.toFixed(3)}; se sugiere entrar por repetición de reacción.`
-        : 'No hay suficientes reacciones repetidas en la zona M5 actual para sugerir entrada por reacción.',
-      zoneDistance,
-    };
   }
 
   /**

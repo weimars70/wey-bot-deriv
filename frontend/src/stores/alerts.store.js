@@ -230,7 +230,11 @@ function buildCrashBoomAlertReport(item) {
   if (orderBlockInZone) fulfilled.push('precio dentro del OB');
 
   const rsi = Number(filters.rsi_M5);
-  const context = Number.isFinite(rsi) ? `RSI M5 ${rsi.toFixed(1)} (contexto)` : null;
+  const rsiValue = Number.isFinite(rsi) ? rsi.toFixed(1) : 'sin datos';
+  const rsiRequirement = isBoom ? '<=35' : '>=65';
+  if (filters.rsiOk) fulfilled.push(`RSI M5 ${rsiValue} (${rsiRequirement})`);
+  else missing.push(`RSI M5 ${rsiValue} (requiere ${rsiRequirement})`);
+
   const fingerprint = ready
     ? `READY_${direction}`
     : [
@@ -238,6 +242,7 @@ function buildCrashBoomAlertReport(item) {
         item.status,
         filters.trendOk ? 'T1' : 'T0',
         filters.greenOk ? 'C1' : `C${coolingCount}`,
+        filters.rsiOk ? 'I1' : 'I0',
         item.m5Viability?.isViable ? 'M1' : 'M0',
         inRetest ? 'R1' : 'R0',
       ].join('_');
@@ -248,7 +253,7 @@ function buildCrashBoomAlertReport(item) {
     ready,
     fulfilled,
     missing,
-    context,
+    context: null,
     fingerprint,
   };
 }

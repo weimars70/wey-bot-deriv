@@ -272,6 +272,10 @@ export class EvolutionCallService {
     else if (item.m5Viability?.isViable) fulfilled.push('confirmacion M5');
     else missing.push(`M5: ${this.compactReason(item.m5Viability?.reason)}`);
 
+    const rsiRequirement = isBoom ? '<=35' : '>=65';
+    if (item.filters.rsiOk) fulfilled.push(`RSI M5 ${item.filters.rsi_M5} (${rsiRequirement})`);
+    else missing.push(`RSI M5 ${item.filters.rsi_M5} (requiere ${rsiRequirement})`);
+
     if (item.activeOrderBlock?.status === 'EN_ZONA') fulfilled.push('precio dentro del OB');
 
     await this.publishCenterAlert({
@@ -286,7 +290,6 @@ export class EvolutionCallService {
         `Precio ${item.currentPrice}`,
         `Cumple: ${fulfilled.length ? fulfilled.join(', ') : 'ningun filtro completo'}`,
         `Falta: ${missing.length ? missing.join(', ') : 'nada'}`,
-        `RSI M5 ${item.filters.rsi_M5} (contexto)`,
         ...(ready ? [`SL ${item.stopLossPrice}`] : []),
       ].join(' | '),
       speechText: ready
@@ -516,6 +519,10 @@ export class EvolutionCallService {
       else if (item.m5Viability?.isViable) fulfilled.push('confirmacion M5');
       else missing.push(`M5: ${this.compactReason(item.m5Viability?.reason)}`);
 
+      const rsiRequirement = isBoom ? '<=35' : '>=65';
+      if (item.filters.rsiOk) fulfilled.push(`RSI M5 ${item.filters.rsi_M5} (${rsiRequirement})`);
+      else missing.push(`RSI M5 ${item.filters.rsi_M5} (requiere ${rsiRequirement})`);
+
       if (item.activeOrderBlock?.status === 'EN_ZONA') fulfilled.push('precio dentro del OB');
 
       return [
@@ -523,7 +530,6 @@ export class EvolutionCallService {
         `Precio: ${item.currentPrice}${ready ? ` | SL: ${item.stopLossPrice}` : ''}`,
         `Cumple: ${fulfilled.length ? fulfilled.join(', ') : 'ningun filtro completo'}`,
         `Falta: ${missing.length ? missing.join(', ') : 'nada'}`,
-        `Contexto: RSI M5 ${item.filters.rsi_M5}`,
         '',
       ];
     });
