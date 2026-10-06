@@ -1010,13 +1010,11 @@ export class TradingBotService implements OnModuleInit {
 
   private async evaluateScheduledCrashBoomAlerts(minuteKey: number): Promise<void> {
     const evaluations = await this.crashIaService.getSummaryAll();
-    const reviewStatuses = new Set(['EN_ZONA_50', 'EN_BASE_CAJA', 'EN_RETESTEO']);
     const candidates = evaluations
-      .filter((item) => item.canBuy || item.canSell || reviewStatuses.has(item.status))
-      .sort((a, b) => Number(b.canBuy || b.canSell) - Number(a.canBuy || a.canSell));
+      .filter((item) => item.canBuy || item.canSell);
 
     if (!candidates.length) {
-      this.logger.log('[CRASH/BOOM WHATSAPP] Evaluacion completada sin indices candidatos.');
+      this.logger.log('[CRASH/BOOM WHATSAPP] Sin posibles spikes confirmados; no se envia alerta.');
       return;
     }
 

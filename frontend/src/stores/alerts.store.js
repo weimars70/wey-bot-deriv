@@ -54,6 +54,10 @@ function isScheduledSignalType(type = '') {
     || type.includes('SPIKE');
 }
 
+function isAnticipatedH1Alert(alert) {
+  return alert?.type === 'H1_NO_WICK' && /ANTICIPADA/i.test(alert.title || '');
+}
+
 function isAllowedH1AlertUser(authStore) {
   return (authStore.user?.email || '').trim().toLowerCase() === H1_ALERT_ALLOWED_EMAIL;
 }
@@ -668,6 +672,8 @@ export const useAlertsStore = defineStore('alerts', {
           !alert.backendId &&
           alert.type === item.type &&
           alert.symbol === item.symbol &&
+          (item.type !== 'H1_NO_WICK'
+            || isAnticipatedH1Alert(alert) === isAnticipatedH1Alert(item)) &&
           Math.abs((alert.createdAtEpoch || 0) - createdAtEpoch) <= 5 * 60_000,
         );
 
@@ -778,10 +784,8 @@ export const useAlertsStore = defineStore('alerts', {
       if (!item || !item.symbol) return;
       const pronounce = formatPronounceableMarket(item.symbol);
       const report = buildCrashBoomAlertReport(item);
-      const reviewStatuses = ['EN_ZONA_50', 'EN_BASE_CAJA', 'EN_RETESTEO'];
-      const shouldReview = report.ready || reviewStatuses.includes(item.status);
 
-      if (!shouldReview) {
+      if (!report.ready) {
         delete this.crashBoomEvaluationStates[item.symbol];
         return;
       }
@@ -804,13 +808,13 @@ export const useAlertsStore = defineStore('alerts', {
           : `${report.isBoom ? 'BOOM' : 'CRASH'}_REVIEW`,
         symbol: item.symbol,
         title: report.ready
-          ? `LISTO ${report.direction}: ${item.symbol}`
+          ? `POSIBLE SPIKE ${report.direction}: ${item.symbol}`
           : `REVISAR ${item.symbol} ${report.direction} - AUN NO ENTRAR`,
         message: report.ready
           ? `Precio ${price} | Cumple: ${fulfilledText} | SL ${stopLoss}${report.context ? ` | ${report.context}` : ''}`
           : `Cumple: ${fulfilledText} | Falta: ${missingText} | Precio ${price}${report.context ? ` | ${report.context}` : ''}`,
         speechText: report.ready
-          ? `Atencion. ${pronounce} listo para ${report.isBoom ? 'compra' : 'venta'}. Cumple zona, tendencia, enfriamiento y confirmacion M cinco. Revise la entrada.`
+          ? `Atencion. Posible spike ${report.isBoom ? 'alcista' : 'bajista'} confirmado en ${pronounce}. Revise el grafico antes de operar.`
           : `Revise ${pronounce} para ${report.isBoom ? 'compra' : 'venta'}. Aun no entrar. Falta ${missingText}.`,
         targetPath: '/crash-ia',
         routeQuery: { symbol: item.symbol },
@@ -916,7 +920,7 @@ export const useAlertsStore = defineStore('alerts', {
                 targetPath: '/h1-strategy',
                 routeQuery: { symbol: alert.symbol },
                 severity: 'warning',
-                dedupeKey: `${alert.symbol}_H1_${alert.closedAt || ''}`,
+                dedupeKey: `${alert.symbol}_H1_${alert.closedAt || ''}_${isAnticipated ? 'ANTICIPADA' : 'CONFIRMADA'}`,
                 playChime: true,
                 toneType: 'radar',
               });

@@ -148,13 +148,16 @@ export class EvolutionCallService {
     evaluations: Array<Omit<CrashIaEvaluation, 'chartCandles'>>,
     deliveryWindow: string,
   ): Promise<void> {
-    if (!evaluations.length) return;
+    const confirmedSignals = evaluations.filter((item) =>
+      item.marketType === 'BOOM' ? item.canBuy : item.canSell,
+    );
+    if (!confirmedSignals.length) return;
 
     await Promise.all(
-      evaluations.map((item) => this.publishCrashBoomCenterAlert(item, deliveryWindow)),
+      confirmedSignals.map((item) => this.publishCrashBoomCenterAlert(item, deliveryWindow)),
     );
 
-    const stateKey = evaluations
+    const stateKey = confirmedSignals
       .map((item) => [
         item.symbol,
         item.canBuy || item.canSell ? 'READY' : item.status,
@@ -166,8 +169,8 @@ export class EvolutionCallService {
       .join(',');
     const telegramNotification = this.sendTelegramNotification(
       `CRASH_BOOM:${deliveryWindow}:${stateKey}`,
-      this.buildCrashBoomTextMessage(evaluations),
-      `Mensaje Crash/Boom ${evaluations.map((item) => item.symbol).join(', ')}`,
+      this.buildCrashBoomTextMessage(confirmedSignals),
+      `Posible spike Crash/Boom ${confirmedSignals.map((item) => item.symbol).join(', ')}`,
     );
 
     if (!this.isTextEnabled()) {
@@ -193,8 +196,8 @@ export class EvolutionCallService {
         recipients,
         `${url}/message/sendText/${encodeURIComponent(instance)}`,
         apiKey,
-        (number) => ({ number, text: this.buildCrashBoomTextMessage(evaluations) }),
-        `Mensaje Crash/Boom ${evaluations.map((item) => item.symbol).join(', ')}`,
+        (number) => ({ number, text: this.buildCrashBoomTextMessage(confirmedSignals) }),
+        `Posible spike Crash/Boom ${confirmedSignals.map((item) => item.symbol).join(', ')}`,
       ),
     ]);
   }
@@ -526,7 +529,7 @@ export class EvolutionCallService {
       if (item.activeOrderBlock?.status === 'EN_ZONA') fulfilled.push('precio dentro del OB');
 
       return [
-        `*${ready ? 'LISTO' : 'REVISAR'} ${direction} - ${item.mercado || item.symbol}${ready ? '' : ' (AUN NO ENTRAR)'}*`,
+        `*POSIBLE SPIKE ${direction} - ${item.mercado || item.symbol}*`,
         `Precio: ${item.currentPrice}${ready ? ` | SL: ${item.stopLossPrice}` : ''}`,
         `Cumple: ${fulfilled.length ? fulfilled.join(', ') : 'ningun filtro completo'}`,
         `Falta: ${missing.length ? missing.join(', ') : 'nada'}`,
@@ -535,8 +538,8 @@ export class EvolutionCallService {
     });
 
     return [
-      '*WEY TRADING - ZONAS V Y H1*',
-      `Evaluacion programada: ${checkedAt}`,
+      '*WEY TRADING - POSIBLES SPIKES*',
+      `Confirmacion: ${checkedAt}`,
       '',
       ...sections,
       'Confirma el grafico antes de operar.',
