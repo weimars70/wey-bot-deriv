@@ -24,6 +24,8 @@ export class DerivWebsocketService implements OnModuleInit, OnModuleDestroy {
   private isAuthorized = false;
   private reconnectAttempts = 0;
   private readonly maxReconnectDelayMs = 30_000;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
+  private isShuttingDown = false;
   private pingInterval: NodeJS.Timeout | null = null;
   private reqIdCounter = 1;
   private readonly pendingRequests = new Map<
@@ -66,6 +68,8 @@ export class DerivWebsocketService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy() {
+    this.isShuttingDown = true;
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     if (this.pingInterval) clearInterval(this.pingInterval);
     if (this.publicPollInterval) clearInterval(this.publicPollInterval);
     this.ws?.close();
@@ -73,11 +77,22 @@ export class DerivWebsocketService implements OnModuleInit, OnModuleDestroy {
   }
 
   private connect() {
+    if (this.isShuttingDown) return;
+
     const useOtp = this.config.get<string>('DERIV_USE_OTP', 'false') === 'true';
     if (useOtp) {
-      this.connectWithOtp().catch((e) =>
-        this.logger.error(`Fallo al conectar con OTP: ${e?.message ?? e}`),
-      );
+      this.connectWithOtp().catch((error: any) => {
+        this.logger.error(`Fallo al conectar con OTP: ${error?.message ?? error}`);
+        const retryableCodes = new Set([
+          'ECONNRESET',
+          'ETIMEDOUT',
+          'EAI_AGAIN',
+          'ECONNREFUSED',
+          'ENETUNREACH',
+          'EHOSTUNREACH',
+        ]);
+        if (retryableCodes.has(error?.code)) this.scheduleReconnect();
+      });
       return;
     }
 
@@ -178,15 +193,21 @@ export class DerivWebsocketService implements OnModuleInit, OnModuleDestroy {
     }
     this.pendingRequests.clear();
 
+    this.scheduleReconnect('Conexión cerrada.');
+  }
+
+  private scheduleReconnect(reason = 'Error de conexión.') {
+    if (this.isShuttingDown || this.reconnectTimeout) return;
+
     this.reconnectAttempts++;
-    const delay = Math.min(
-      1000 * 2 ** this.reconnectAttempts,
-      this.maxReconnectDelayMs,
-    );
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, this.maxReconnectDelayMs);
     this.logger.warn(
-      `Conexión cerrada. Reintentando en ${delay / 1000}s (intento ${this.reconnectAttempts})`,
+      `${reason} Reintentando en ${delay / 1000}s (intento ${this.reconnectAttempts})`,
     );
-    setTimeout(() => this.connect(), delay);
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = null;
+      this.connect();
+    }, delay);
   }
 
   private onMessage(raw: WebSocket.RawData) {

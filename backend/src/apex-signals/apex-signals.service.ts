@@ -47,6 +47,7 @@ export class ApexSignalsService implements OnModuleInit {
   private huella: string = HUELLA_DEFAULT;
   private isAuthenticating: boolean = false;
   private cooldownUntil: number = 0;
+  private licenseBlocked: boolean = false;
   private lastError: string | null = null;
 
   private cachedSignals: ApexSignal[] = [];
@@ -61,32 +62,36 @@ export class ApexSignalsService implements OnModuleInit {
     this.loadSessionFile();
 
     // 0. Si hay token en variable de entorno .env, usarlo preferentemente
-    if (process.env.APEX_SESSION_TOKEN && !this.sessionToken) {
+    if (!this.licenseBlocked && process.env.APEX_SESSION_TOKEN && !this.sessionToken) {
       this.sessionToken = process.env.APEX_SESSION_TOKEN.trim();
       this.logger.log('🔑 Usando APEX_SESSION_TOKEN desde variables de entorno.');
     }
 
-    // 1. Verificar si ya tenemos una sesión guardada y si sigue activa
-    let validSession = false;
-    if (this.sessionToken) {
-      this.logger.log('🔍 Validando sesión guardada de ApexFusion...');
-      validSession = await this.testSession();
-      if (validSession) {
-        this.logger.log(`✅ Sesión ApexFusion reutilizada exitosamente (cuenta ${CUENTA_DEFAULT}). No se requiere nuevo login.`);
-        this.lastError = null;
-        await this.fetchAndCache();
-      } else {
-        this.logger.warn('⚠️ La sesión guardada ha expirado o no es válida. Se intentará autenticar una sola vez...');
-        this.sessionToken = null;
-      }
-    }
-
-    // 2. Si no hay sesión válida, autenticar UNA SOLA VEZ con la huella registrada
-    if (!this.sessionToken) {
-      const autoRelevo = process.env.APEX_AUTO_RELEVO === 'true';
-      await this.authenticate({ relevo: autoRelevo });
+    if (this.licenseBlocked) {
+      this.logger.warn('ApexFusion desactivado: licencia no vigente. No se intentará conectar automáticamente.');
+    } else {
+      // 1. Verificar si ya tenemos una sesión guardada y si sigue activa
+      let validSession = false;
       if (this.sessionToken) {
-        await this.fetchAndCache();
+        this.logger.log('🔍 Validando sesión guardada de ApexFusion...');
+        validSession = await this.testSession();
+        if (validSession) {
+          this.logger.log(`✅ Sesión ApexFusion reutilizada exitosamente (cuenta ${CUENTA_DEFAULT}). No se requiere nuevo login.`);
+          this.lastError = null;
+          await this.fetchAndCache();
+        } else {
+          this.logger.warn('⚠️ La sesión guardada ha expirado o no es válida. Se intentará autenticar una sola vez...');
+          this.sessionToken = null;
+        }
+      }
+
+      // 2. Si no hay sesión válida, autenticar UNA SOLA VEZ con la huella registrada
+      if (!this.sessionToken) {
+        const autoRelevo = process.env.APEX_AUTO_RELEVO === 'true';
+        await this.authenticate({ relevo: autoRelevo });
+        if (this.sessionToken) {
+          await this.fetchAndCache();
+        }
       }
     }
 
@@ -118,7 +123,9 @@ export class ApexSignalsService implements OnModuleInit {
         const raw = fs.readFileSync(this.sessionFilePath, 'utf-8');
         const data = JSON.parse(raw);
         this.huella = data.huella || HUELLA_DEFAULT;
-        this.sessionToken = data.sesion || null;
+        this.licenseBlocked = data.licenseBlocked === true;
+        this.sessionToken = this.licenseBlocked ? null : data.sesion || null;
+        if (this.licenseBlocked) this.lastError = 'licencia no vigente para esa cuenta';
         this.logger.log(`📄 Archivo de sesión cargado desde: ${this.sessionFilePath}`);
       }
     } catch (err: any) {
@@ -137,6 +144,7 @@ export class ApexSignalsService implements OnModuleInit {
       const data = {
         huella: this.huella || HUELLA_DEFAULT,
         sesion: this.sessionToken,
+        licenseBlocked: this.licenseBlocked,
         updatedAt: new Date().toISOString(),
       };
       fs.writeFileSync(this.sessionFilePath, JSON.stringify(data, null, 2), 'utf-8');
@@ -167,6 +175,11 @@ export class ApexSignalsService implements OnModuleInit {
   // ── Authentication ("UNA SOLA VEZ" con cerrojo y enfriamiento) ─────────────
 
   public async authenticate(opts?: { relevo?: boolean; cuenta?: string }): Promise<boolean> {
+    if (this.licenseBlocked) {
+      this.logger.warn('Autenticación ApexFusion omitida: la licencia no está vigente.');
+      return false;
+    }
+
     // Si ya hay una autenticación en curso, evitar duplicados simultáneos
     if (this.isAuthenticating) {
       this.logger.debug('Autenticación ya en curso, ignorando llamada duplicada.');
@@ -211,6 +224,13 @@ export class ApexSignalsService implements OnModuleInit {
 
       this.lastError = data?.mensaje || data?.error || 'Autenticación fallida';
       this.cooldownUntil = Date.now() + COOLDOWN_ON_ERROR_MS;
+      if (String(data?.error || '').toLowerCase().includes('licencia no vigente')) {
+        this.licenseBlocked = true;
+        this.sessionToken = null;
+        this.saveSessionFile();
+        this.logger.warn('ApexFusion detenido: licencia no vigente para esa cuenta. No se reintentará automáticamente.');
+        return false;
+      }
       this.logger.warn(`❌ Autenticación fallida: ${JSON.stringify(data)}`);
       return false;
     } catch (err: any) {
@@ -226,6 +246,8 @@ export class ApexSignalsService implements OnModuleInit {
   // ── Polling Tick ──────────────────────────────────────────────────────────
 
   private async tick() {
+    if (this.licenseBlocked) return;
+
     // Si no hay sesión activa:
     if (!this.sessionToken) {
       // Si estamos en período de enfriamiento tras un error (como DOS_LUGARES), NO saturar
@@ -350,7 +372,9 @@ export class ApexSignalsService implements OnModuleInit {
   }
 
   async manualLogin(relevo: boolean = false, cuenta?: string): Promise<{ ok: boolean; message: string }> {
+    this.licenseBlocked = false;
     this.cooldownUntil = 0; // Quitar cooldown si el usuario pide login manual
+    this.saveSessionFile();
     const ok = await this.authenticate({ relevo, cuenta });
     if (ok) {
       await this.fetchAndCache();

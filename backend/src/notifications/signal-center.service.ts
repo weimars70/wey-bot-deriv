@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { In, LessThan, Not, Repository } from 'typeorm';
 import { SignalCenterAlert } from './signal-center-alert.entity';
 
 export interface PublishSignalCenterAlert {
@@ -28,6 +28,10 @@ export class SignalCenterService {
   ) {}
 
   async publish(input: PublishSignalCenterAlert): Promise<SignalCenterAlert> {
+    if (input.type === 'CRASH_REVIEW' || input.type === 'BOOM_REVIEW') {
+      throw new Error(`Se descarto una alerta no operable: ${input.type}`);
+    }
+
     const existing = await this.alertsRepo.findOne({
       where: { dedupeKey: input.dedupeKey },
     });
@@ -64,6 +68,7 @@ export class SignalCenterService {
   list(limit = 60): Promise<SignalCenterAlert[]> {
     const safeLimit = Math.min(200, Math.max(1, Number(limit) || 60));
     return this.alertsRepo.find({
+      where: { type: Not(In(['CRASH_REVIEW', 'BOOM_REVIEW'])) },
       order: { createdAt: 'DESC' },
       take: safeLimit,
     });

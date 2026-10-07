@@ -58,6 +58,10 @@ function isAnticipatedH1Alert(alert) {
   return alert?.type === 'H1_NO_WICK' && /ANTICIPADA/i.test(alert.title || '');
 }
 
+function isSuppressedCrashBoomReview(alert) {
+  return alert?.type === 'CRASH_REVIEW' || alert?.type === 'BOOM_REVIEW';
+}
+
 function isAllowedH1AlertUser(authStore) {
   return (authStore.user?.email || '').trim().toLowerCase() === H1_ALERT_ALLOWED_EMAIL;
 }
@@ -647,6 +651,10 @@ export const useAlertsStore = defineStore('alerts', {
     ingestSignalCenterAlerts(items, live = false) {
       if (!Array.isArray(items) || !items.length) return;
 
+      this.alerts = this.alerts.filter((alert) => !isSuppressedCrashBoomReview(alert));
+      items = items.filter((item) => !isSuppressedCrashBoomReview(item));
+      if (!items.length) return;
+
       const delivered = new Set(readStoredCenterIds('delivered'));
       const dismissed = new Set(readStoredCenterIds('dismissed'));
       const existingBackendIds = new Set(
@@ -795,33 +803,22 @@ export const useAlertsStore = defineStore('alerts', {
 
       const fulfilledText = report.fulfilled.length
         ? report.fulfilled.join(', ')
-        : 'ningun filtro completo';
-      const missingText = report.missing.length
-        ? report.missing.join(', ')
-        : 'ninguno';
+        : 'todos los filtros completos';
       const price = formatAlertPrice(item.currentPrice);
       const stopLoss = formatAlertPrice(item.stopLossPrice);
 
       this.triggerNotification({
-        type: report.ready
-          ? `${report.isBoom ? 'BOOM_BUY' : 'CRASH_SELL'}_CONFIRMED`
-          : `${report.isBoom ? 'BOOM' : 'CRASH'}_REVIEW`,
+        type: `${report.isBoom ? 'BOOM_BUY' : 'CRASH_SELL'}_CONFIRMED`,
         symbol: item.symbol,
-        title: report.ready
-          ? `POSIBLE SPIKE ${report.direction}: ${item.symbol}`
-          : `REVISAR ${item.symbol} ${report.direction} - AUN NO ENTRAR`,
-        message: report.ready
-          ? `Precio ${price} | Cumple: ${fulfilledText} | SL ${stopLoss}${report.context ? ` | ${report.context}` : ''}`
-          : `Cumple: ${fulfilledText} | Falta: ${missingText} | Precio ${price}${report.context ? ` | ${report.context}` : ''}`,
-        speechText: report.ready
-          ? `Atencion. Posible spike ${report.isBoom ? 'alcista' : 'bajista'} confirmado en ${pronounce}. Revise el grafico antes de operar.`
-          : `Revise ${pronounce} para ${report.isBoom ? 'compra' : 'venta'}. Aun no entrar. Falta ${missingText}.`,
+        title: `POSIBLE SPIKE ${report.direction}: ${item.symbol}`,
+        message: `Precio ${price} | Cumple: ${fulfilledText} | SL ${stopLoss}${report.context ? ` | ${report.context}` : ''}`,
+        speechText: `Atencion. Posible spike ${report.isBoom ? 'alcista' : 'bajista'} confirmado en ${pronounce}. Revise el grafico antes de operar.`,
         targetPath: '/crash-ia',
         routeQuery: { symbol: item.symbol },
-        severity: report.ready ? 'positive' : 'warning',
+        severity: 'positive',
         dedupeKey: `${item.symbol}_${report.fingerprint}`,
         playChime: true,
-        toneType: report.ready ? 'trade' : 'radar',
+        toneType: 'trade',
       });
     },
 

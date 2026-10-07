@@ -45,21 +45,17 @@ export class EvolutionCallService {
       validAlerts.map((alert) => this.publishH1CenterAlert(alert, deliveryWindow)),
     );
 
-    const targetHour = validAlerts
-      .map((alert) => alert.closedAt)
-      .filter(Boolean)
-      .sort()[0] || new Date().toISOString().slice(0, 13);
-    const h1Key = `${targetHour}:${deliveryWindow}:${validAlerts.map((alert) => alert.symbol).sort().join(',')}`;
-    const telegramNotification = this.sendTelegramNotification(
-      `H1:${h1Key}`,
-      this.buildH1TextMessage(validAlerts, targetHour),
-      `Mensaje H1 ${validAlerts.map((alert) => alert.symbol).sort().join(', ')}`,
-    );
-
     const textEnabled = this.isTextEnabled();
     const callEnabled = this.isCallEnabled();
     if (!textEnabled && !callEnabled) {
-      await telegramNotification;
+      await Promise.all(validAlerts.map((alert) => {
+        const alertKey = `${alert.closedAt}:${deliveryWindow}:${alert.symbol}`;
+        return this.sendTelegramNotification(
+          `H1:${alertKey}`,
+          this.buildH1TextMessage([alert], alert.closedAt),
+          `Mensaje H1 ${alert.symbol}`,
+        );
+      }));
       return;
     }
 
@@ -77,38 +73,58 @@ export class EvolutionCallService {
     const recipients = await this.getH1Recipients();
     if (!url || !instance || !apiKey || !recipients.length) {
       this.logger.warn('Alertas H1 por WhatsApp habilitadas, pero faltan datos de Evolution API o destinatarios.');
-      await telegramNotification;
+      await Promise.all(validAlerts.map((alert) => {
+        const alertKey = `${alert.closedAt}:${deliveryWindow}:${alert.symbol}`;
+        return this.sendTelegramNotification(
+          `H1:${alertKey}`,
+          this.buildH1TextMessage([alert], alert.closedAt),
+          `Mensaje H1 ${alert.symbol}`,
+        );
+      }));
       return;
     }
 
     this.cleanupOldWindows();
 
-    const notifications: Promise<void>[] = [telegramNotification];
-    if (textEnabled) {
-      notifications.push(this.sendChannelNotification(
-        `H1:text:${targetHour}:${deliveryWindow}:${validAlerts.map((alert) => alert.symbol).sort().join(',')}`,
-        recipients,
-        `${url}/message/sendText/${encodeURIComponent(instance)}`,
-        apiKey,
-        (number) => ({ number, text: this.buildH1TextMessage(validAlerts, targetHour) }),
-        `Mensaje H1 ${validAlerts.map((alert) => alert.symbol).sort().join(', ')}`,
-      ));
-    }
+    const duration = Math.min(
+      30,
+      Math.max(3, Number(this.config.get<string>('EVOLUTION_H1_CALL_DURATION_SECONDS')) || 12),
+    );
+    const notifications = validAlerts.flatMap((alert) => {
+      const alertKey = `${alert.closedAt}:${deliveryWindow}:${alert.symbol}`;
+      const message = this.buildH1TextMessage([alert], alert.closedAt);
+      const pending: Promise<void>[] = [
+        this.sendTelegramNotification(
+          `H1:${alertKey}`,
+          message,
+          `Mensaje H1 ${alert.symbol}`,
+        ),
+      ];
 
-    if (callEnabled) {
-      const duration = Math.min(
-        30,
-        Math.max(3, Number(this.config.get<string>('EVOLUTION_H1_CALL_DURATION_SECONDS')) || 12),
-      );
-      notifications.push(this.sendChannelNotification(
-        `H1:call:${targetHour}:${deliveryWindow}:${validAlerts.map((alert) => alert.symbol).sort().join(',')}`,
-        recipients.filter((recipient) => !recipient.endsWith('@g.us')),
-        `${url}/call/offer/${encodeURIComponent(instance)}`,
-        apiKey,
-        (number) => ({ number, isVideo: false, callDuration: duration }),
-        'Llamada H1',
-      ));
-    }
+      if (textEnabled) {
+        pending.push(this.sendChannelNotification(
+          `H1:text:${alertKey}`,
+          recipients,
+          `${url}/message/sendText/${encodeURIComponent(instance)}`,
+          apiKey,
+          (number) => ({ number, text: message }),
+          `Mensaje H1 ${alert.symbol}`,
+        ));
+      }
+
+      if (callEnabled) {
+        pending.push(this.sendChannelNotification(
+          `H1:call:${alertKey}`,
+          recipients.filter((recipient) => !recipient.endsWith('@g.us')),
+          `${url}/call/offer/${encodeURIComponent(instance)}`,
+          apiKey,
+          (number) => ({ number, isVideo: false, callDuration: duration }),
+          `Llamada H1 ${alert.symbol}`,
+        ));
+      }
+
+      return pending;
+    });
 
     await Promise.all(notifications);
   }
@@ -167,9 +183,14 @@ export class EvolutionCallService {
       ].join(':'))
       .sort()
       .join(',');
+    const telegramText = this.buildCrashBoomTextMessage(confirmedSignals);
+    if (!telegramText) {
+      this.logger.log('[CRASH/BOOM TELEGRAM] Sin señales con todos los filtros completos; no se envia mensaje a Telegram.');
+      return;
+    }
     const telegramNotification = this.sendTelegramNotification(
       `CRASH_BOOM:${deliveryWindow}:${stateKey}`,
-      this.buildCrashBoomTextMessage(confirmedSignals),
+      telegramText,
       `Posible spike Crash/Boom ${confirmedSignals.map((item) => item.symbol).join(', ')}`,
     );
 
@@ -246,6 +267,8 @@ export class EvolutionCallService {
     const isBoom = item.marketType === 'BOOM';
     const direction = isBoom ? 'BUY' : 'SELL';
     const ready = isBoom ? item.canBuy : item.canSell;
+    if (!ready) return;
+
     const count = isBoom
       ? item.filters.consecutiveRedM1
       : item.filters.consecutiveGreenM1;
@@ -282,25 +305,19 @@ export class EvolutionCallService {
     if (item.activeOrderBlock?.status === 'EN_ZONA') fulfilled.push('precio dentro del OB');
 
     await this.publishCenterAlert({
-      type: ready
-        ? `${isBoom ? 'BOOM_BUY' : 'CRASH_SELL'}_CONFIRMED`
-        : `${isBoom ? 'BOOM' : 'CRASH'}_REVIEW`,
+      type: `${isBoom ? 'BOOM_BUY' : 'CRASH_SELL'}_CONFIRMED`,
       symbol: item.symbol,
-      title: ready
-        ? `LISTO ${direction}: ${item.mercado || item.symbol}`
-        : `REVISAR ${direction}: ${item.mercado || item.symbol} - AUN NO ENTRAR`,
+      title: `LISTO ${direction}: ${item.mercado || item.symbol}`,
       message: [
         `Precio ${item.currentPrice}`,
-        `Cumple: ${fulfilled.length ? fulfilled.join(', ') : 'ningun filtro completo'}`,
-        `Falta: ${missing.length ? missing.join(', ') : 'nada'}`,
-        ...(ready ? [`SL ${item.stopLossPrice}`] : []),
+        `Cumple: ${fulfilled.length ? fulfilled.join(', ') : 'todos los filtros'}`,
+        `Falta: nada`,
+        `SL ${item.stopLossPrice}`,
       ].join(' | '),
-      speechText: ready
-        ? `Atencion. ${item.mercado || item.symbol} listo para ${isBoom ? 'compra' : 'venta'}. Revise la entrada.`
-        : `Revise ${item.mercado || item.symbol} para ${isBoom ? 'compra' : 'venta'}. Aun no entrar.`,
+      speechText: `Atencion. ${item.mercado || item.symbol} listo para ${isBoom ? 'compra' : 'venta'}. Revise la entrada.`,
       targetPath: '/crash-ia',
       routeQuery: { symbol: item.symbol },
-      severity: ready ? 'positive' : 'warning',
+      severity: 'positive',
       dedupeKey: `CENTER:CRASH_BOOM:${deliveryWindow}:${item.symbol}`,
     });
   }
@@ -328,6 +345,16 @@ export class EvolutionCallService {
     text: string,
     channelLabel: string,
   ): Promise<void> {
+    if (/AUN NO ENTRAR/i.test(text)) {
+      this.logger.warn(`Mensaje ${channelLabel} omitido: contiene una señal marcada AUN NO ENTRAR.`);
+      return;
+    }
+    // Solo enviar si no hay condiciones pendientes (Falta: debe ser 'nada')
+    if (/Falta:\s*(?!nada)[^\n]+/i.test(text)) {
+      this.logger.warn(`Mensaje ${channelLabel} omitido: contiene condiciones pendientes (Falta: no es 'nada').`);
+      return;
+    }
+
     const token = (this.config.get<string>('TELEGRAM_BOT_TOKEN') || '').trim();
     const chatId = (this.config.get<string>('TELEGRAM_CHAT_ID') || '').trim();
     if (!token || !chatId) return;
@@ -484,12 +511,20 @@ export class EvolutionCallService {
   private buildCrashBoomTextMessage(
     evaluations: Array<Omit<CrashIaEvaluation, 'chartCandles'>>,
   ): string {
+    const confirmedSignals = evaluations.filter((item) =>
+      item.marketType === 'BOOM' ? item.canBuy : item.canSell,
+    );
+    if (!confirmedSignals.length) return '';
+
     const checkedAt = new Intl.DateTimeFormat('es-CO', {
       timeZone: 'America/Bogota',
       hour: '2-digit',
       minute: '2-digit',
     }).format(new Date());
-    const sections = evaluations.flatMap((item) => {
+
+    const sections: string[] = [];
+
+    for (const item of confirmedSignals) {
       const isBoom = item.marketType === 'BOOM';
       const direction = isBoom ? 'BUY' : 'SELL';
       const ready = isBoom ? item.canBuy : item.canSell;
@@ -528,18 +563,28 @@ export class EvolutionCallService {
 
       if (item.activeOrderBlock?.status === 'EN_ZONA') fulfilled.push('precio dentro del OB');
 
-      return [
-        `*POSIBLE SPIKE ${direction} - ${item.mercado || item.symbol}*`,
-        `Precio: ${item.currentPrice}${ready ? ` | SL: ${item.stopLossPrice}` : ''}`,
-        `Cumple: ${fulfilled.length ? fulfilled.join(', ') : 'ningun filtro completo'}`,
-        `Falta: ${missing.length ? missing.join(', ') : 'nada'}`,
+      // Solo incluir en el mensaje de Telegram cuando todos los filtros están completos
+      if (missing.length > 0) {
+        this.logger.log(
+          `[CRASH/BOOM TELEGRAM] ${item.mercado || item.symbol} omitido del mensaje: Falta ${missing.join(', ')}.`,
+        );
+        continue;
+      }
+
+      sections.push(
+        `*LISTO ${direction} - ${item.mercado || item.symbol}*`,
+        `Precio: ${item.currentPrice} | SL: ${item.stopLossPrice}`,
+        `Cumple: ${fulfilled.join(', ')}`,
+        `Falta: nada`,
         '',
-      ];
-    });
+      );
+    }
+
+    if (!sections.length) return '';
 
     return [
-      '*WEY TRADING - POSIBLES SPIKES*',
-      `Confirmacion: ${checkedAt}`,
+      '*WEY TRADING - SEÑAL CONFIRMADA*',
+      `Evaluacion: ${checkedAt}`,
       '',
       ...sections,
       'Confirma el grafico antes de operar.',

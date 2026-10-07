@@ -22,7 +22,7 @@ export class TradingBotService implements OnModuleInit {
   // Configuraciones del Bot
   private h1AutoEnabled = true;
   private dashboardStarsAutoEnabled = true;
-  private crashBoomAutoEnabled = false;
+  private crashBoomAutoEnabled = true;
   private m5PlusAutoEnabled = false; // M5++ auto-trading (desactivado por defecto, activar desde el panel)
   private m5XAutoEnabled = false;
   private maxOpenTrades = 10;
