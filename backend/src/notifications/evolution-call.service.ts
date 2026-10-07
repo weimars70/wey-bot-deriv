@@ -331,13 +331,21 @@ export class EvolutionCallService {
   }
 
   private isTextEnabled(): boolean {
-    const configured = this.config.get<string>('EVOLUTION_H1_WHATSAPP_ENABLED');
-    if (configured?.trim()) return configured.toLowerCase() === 'true';
-    return Boolean((this.config.get<string>('APIKEYWHATSAPP') || '').trim());
+    const configured = this.config.get<string | boolean>('EVOLUTION_H1_WHATSAPP_ENABLED');
+    if (typeof configured === 'boolean') return configured;
+    if (typeof configured === 'string' && configured.trim().length > 0) {
+      return configured.trim().toLowerCase() === 'true';
+    }
+    return false;
   }
 
   private isCallEnabled(): boolean {
-    return (this.config.get<string>('EVOLUTION_H1_CALL_ENABLED') || '').toLowerCase() === 'true';
+    const configured = this.config.get<string | boolean>('EVOLUTION_H1_CALL_ENABLED');
+    if (typeof configured === 'boolean') return configured;
+    if (typeof configured === 'string' && configured.trim().length > 0) {
+      return configured.trim().toLowerCase() === 'true';
+    }
+    return false;
   }
 
   private async sendTelegramNotification(
