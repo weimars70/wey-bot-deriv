@@ -389,6 +389,7 @@
           :ob-status="currentEvaluation?.activeOrderBlock?.status || ''"
           :ob-epoch="currentEvaluation?.activeOrderBlock?.epoch || 0"
           :active-trade="activeTradeForSelected"
+          :gaps="currentEvaluation?.gaps || []"
         />
         <q-inner-loading :showing="loading && !currentEvaluation" color="primary" label="Cargando velas..." />
 
@@ -421,6 +422,106 @@
 
       <!-- Columna Derecha: Diagnóstico y Niveles Exactos -->
       <div class="col-12 col-lg-4" v-if="evaluation">
+        <!-- ── TARJETA: GAPS VIGILADOS M1 (BOOM BUY / CRASH SELL) ─────── -->
+        <div class="bg-white rounded-borders q-pa-lg border-slate q-mb-md" v-if="evaluation?.gaps && evaluation.gaps.length">
+          <div class="row items-center justify-between q-mb-sm border-b-slate q-pb-sm">
+            <div class="row items-center q-gutter-xs">
+              <q-icon name="horizontal_split" :color="isBoom ? 'cyan-8' : 'orange-8'" size="20px" />
+              <span class="text-subtitle1 text-weight-bolder text-slate-900">
+                {{ isBoom ? 'Gaps M1 Vigilados (Boom Buy)' : 'Gaps M1 Vigilados (Crash Sell)' }}
+              </span>
+            </div>
+            <q-badge
+              :color="isBoom ? 'cyan-1' : 'orange-1'"
+              :text-color="isBoom ? 'cyan-9' : 'orange-9'"
+              :label="`${evaluation.gaps.length} Gaps en BD`"
+              class="font-mono text-weight-bold"
+            />
+          </div>
+
+          <div class="text-caption text-slate-500 q-mb-md">
+            Líneas horizontales punteadas en el gráfico. Alerta enviada a <b>Telegram ~2 min antes</b> de tocar el Gap en retroceso con tendencia M15 a favor.
+          </div>
+
+          <div v-if="evaluation.gaps[0]" class="q-gutter-y-sm">
+            <div
+              class="q-pa-sm rounded-borders row items-center justify-between"
+              :class="isBoom ? 'bg-cyan-50' : 'bg-orange-50'"
+              style="border: 1px solid #06b6d4;"
+            >
+              <div>
+                <div class="text-caption text-weight-bolder" :class="isBoom ? 'text-cyan-10' : 'text-orange-10'">
+                  🎯 Gap Más Cercano ({{ isBoom ? 'BUY' : 'SELL' }})
+                </div>
+                <div class="text-caption text-slate-500" style="font-size: 10px;">
+                  Distancia: <b>{{ formatNum(evaluation.gaps[0].distToPrice) }} pts</b> (~{{ evaluation.gaps[0].minutesToArrival }} min de llegada)
+                </div>
+              </div>
+              <span class="font-mono text-weight-bolder text-subtitle1" :class="isBoom ? 'text-cyan-10' : 'text-orange-10'">
+                {{ formatNum(evaluation.gaps[0].price) }}
+              </span>
+            </div>
+
+            <!-- Estado de Retroceso y Filtro M15 -->
+            <div class="row items-center q-gutter-xs q-mt-xs">
+              <q-chip
+                dense
+                size="sm"
+                :color="evaluation.gaps[0].inRetracement ? 'teal-9' : 'grey-7'"
+                text-color="white"
+                class="text-weight-bold"
+              >
+                <q-icon :name="evaluation.gaps[0].inRetracement ? 'trending_down' : 'sync'" size="14px" class="q-mr-xs" />
+                {{ evaluation.gaps[0].inRetracement ? 'En retroceso hacia el Gap' : 'Fuera de retroceso' }}
+              </q-chip>
+
+              <q-chip
+                dense
+                size="sm"
+                :color="evaluation.filters?.trendOk ? 'emerald-9' : 'red-9'"
+                text-color="white"
+                class="text-weight-bold"
+              >
+                <q-icon :name="evaluation.filters?.trendOk ? 'check_circle' : 'cancel'" size="14px" class="q-mr-xs" />
+                M15: {{ evaluation.filters?.trendM15 }} ({{ evaluation.filters?.trendOk ? 'A FAVOR' : 'EN CONTRA' }})
+              </q-chip>
+            </div>
+
+            <div class="q-pa-xs rounded-borders text-caption text-slate-600 bg-slate-50 font-mono row items-center justify-between q-mt-xs">
+              <div class="row items-center q-gutter-xs">
+                <q-icon name="send" color="primary" size="14px" />
+                <span>Alerta Telegram:</span>
+              </div>
+              <span class="text-weight-bolder" :class="evaluation.gaps[0].inRetracement && evaluation.filters?.trendOk ? 'text-emerald-7' : 'text-slate-500'">
+                {{ evaluation.gaps[0].inRetracement && evaluation.filters?.trendOk ? 'Activa (~2 min antes)' : 'En espera de condiciones' }}
+              </span>
+            </div>
+
+            <!-- Lista de los 4 Gaps más cercanos -->
+            <div class="q-mt-sm border-t-slate q-pt-xs">
+              <div class="text-caption text-weight-bold text-slate-700 q-mb-xs">Próximos Gaps M1:</div>
+              <div class="q-gutter-y-xs">
+                <div
+                  v-for="(g, idx) in evaluation.gaps.slice(0, 4)"
+                  :key="g.id || idx"
+                  class="row items-center justify-between text-caption font-mono q-py-xs border-b-slate-light"
+                >
+                  <div class="row items-center q-gutter-xs">
+                    <span class="text-weight-bold" :class="isBoom ? 'text-cyan-9' : 'text-orange-9'">{{ formatNum(g.price) }}</span>
+                    <span class="text-slate-500">({{ formatNum(g.distToPrice) }} pts)</span>
+                  </div>
+                  <q-badge
+                    size="xs"
+                    :color="g.inRetracement ? 'cyan-1' : 'grey-2'"
+                    :text-color="g.inRetracement ? 'cyan-9' : 'grey-7'"
+                    :label="`~${g.minutesToArrival} min`"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- ── TARJETA: PUNTOS ORDER BLOCK (OB) ─────────────────────────── -->
         <div class="bg-white rounded-borders q-pa-lg border-slate q-mb-md" v-if="evaluation.activeOrderBlock">
           <div class="row items-center justify-between q-mb-sm border-b-slate q-pb-sm">
@@ -966,7 +1067,7 @@ onMounted(() => {
   loadEvaluation();
   refreshTimer = setInterval(() => {
     loadEvaluation();
-  }, 15 * 60 * 1000);
+  }, 15 * 1000); // 15 segundos
 });
 
 onUnmounted(() => {

@@ -577,7 +577,10 @@ export class DerivWebsocketService implements OnModuleInit, OnModuleDestroy {
       end: 'latest',
       count: macroHistoryCounts[granularitySeconds] ?? 500,
     };
-    if (!isNonOtp) {
+    // Solo suscribirse en streaming continuo para M1 y M5 (temporalidades rápidas de operativa).
+    // Las macro temporalidades (>300: M15, M30, H1, H4) se consultan como historial sin suscripción persistente,
+    // evitando agotar el límite de suscripciones activas de Deriv (SubscriptionLimitExceeded).
+    if (!isNonOtp && granularitySeconds <= 300) {
       payload.subscribe = 1;
     }
 

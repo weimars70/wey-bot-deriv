@@ -65,10 +65,28 @@ export class SignalCenterService {
     }
   }
 
+  async claimTelegramDispatch(notificationKey: string): Promise<boolean> {
+    const dedupeKey = `TG_DISPATCH:${notificationKey}`.slice(0, 255);
+    try {
+      const existing = await this.alertsRepo.findOne({ where: { dedupeKey } });
+      if (existing) return false;
+      const record = this.alertsRepo.create({
+        type: 'TG_DISPATCH',
+        title: 'Telegram Lock',
+        message: 'Lock',
+        dedupeKey,
+      });
+      await this.alertsRepo.save(record);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   list(limit = 60): Promise<SignalCenterAlert[]> {
     const safeLimit = Math.min(200, Math.max(1, Number(limit) || 60));
     return this.alertsRepo.find({
-      where: { type: Not(In(['CRASH_REVIEW', 'BOOM_REVIEW'])) },
+      where: { type: Not(In(['CRASH_REVIEW', 'BOOM_REVIEW', 'TG_DISPATCH'])) },
       order: { createdAt: 'DESC' },
       take: safeLimit,
     });

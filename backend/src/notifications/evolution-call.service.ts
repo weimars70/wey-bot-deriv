@@ -41,21 +41,38 @@ export class EvolutionCallService {
     const validAlerts = alerts.filter((alert) => alert?.symbol && alert?.closedAt);
     if (!validAlerts.length) return;
 
+    // ── REGLA CRÍTICA USUARIO: Se envía SOLO en el minuto 58 anterior o al minuto 00 ──
+    const now = new Date();
+    const currentMinute = now.getMinutes();
+    if (currentMinute !== 58 && currentMinute !== 0) {
+      this.logger.debug(
+        `[H1 ALERTA] Minuto ${currentMinute} omitido. H1 solo se envía en minuto 58 o 00.`,
+      );
+      return;
+    }
+
     await Promise.all(
       validAlerts.map((alert) => this.publishH1CenterAlert(alert, deliveryWindow)),
     );
 
+    this.cleanupOldWindows();
+
+    // ── Enviar a Telegram cada alerta H1 sin mecha ──
+    for (const alert of validAlerts) {
+      const alertKey = `H1_NOWICK:${alert.symbol}:${alert.closedAt}:${deliveryWindow}`;
+      const message = this.buildH1TextMessage([alert], alert.closedAt);
+      void this.sendTelegramNotification(
+        alertKey,
+        message,
+        `Alerta H1 Sin Mecha ${alert.symbol}`,
+      ).catch((err) => {
+        this.logger.error(`Error enviando alerta H1 a Telegram: ${err?.message || err}`);
+      });
+    }
+
     const textEnabled = this.isTextEnabled();
     const callEnabled = this.isCallEnabled();
     if (!textEnabled && !callEnabled) {
-      await Promise.all(validAlerts.map((alert) => {
-        const alertKey = `${alert.closedAt}:${deliveryWindow}:${alert.symbol}`;
-        return this.sendTelegramNotification(
-          `H1:${alertKey}`,
-          this.buildH1TextMessage([alert], alert.closedAt),
-          `Mensaje H1 ${alert.symbol}`,
-        );
-      }));
       return;
     }
 
@@ -73,14 +90,6 @@ export class EvolutionCallService {
     const recipients = await this.getH1Recipients();
     if (!url || !instance || !apiKey || !recipients.length) {
       this.logger.warn('Alertas H1 por WhatsApp habilitadas, pero faltan datos de Evolution API o destinatarios.');
-      await Promise.all(validAlerts.map((alert) => {
-        const alertKey = `${alert.closedAt}:${deliveryWindow}:${alert.symbol}`;
-        return this.sendTelegramNotification(
-          `H1:${alertKey}`,
-          this.buildH1TextMessage([alert], alert.closedAt),
-          `Mensaje H1 ${alert.symbol}`,
-        );
-      }));
       return;
     }
 
@@ -93,13 +102,7 @@ export class EvolutionCallService {
     const notifications = validAlerts.flatMap((alert) => {
       const alertKey = `${alert.closedAt}:${deliveryWindow}:${alert.symbol}`;
       const message = this.buildH1TextMessage([alert], alert.closedAt);
-      const pending: Promise<void>[] = [
-        this.sendTelegramNotification(
-          `H1:${alertKey}`,
-          message,
-          `Mensaje H1 ${alert.symbol}`,
-        ),
-      ];
+      const pending: Promise<void>[] = [];
 
       if (textEnabled) {
         pending.push(this.sendChannelNotification(
@@ -158,6 +161,130 @@ export class EvolutionCallService {
       (number) => ({ number, text: `*WEY TRADING - PUNTO VIGILADO*\n\nIndice: *${symbol}*\nEstado: *${stateText}*\nPunto registrado: *${entryPrice}*\n\nEl nivel esta siendo evaluado.` }),
       `Mensaje punto vigilado ${symbol}`,
     );
+  }
+
+  async notifyGapSpikeAlert(data: {
+    symbol: string;
+    direction: 'BUY' | 'SELL';
+    entryPrice: number;
+    currentPrice: number;
+    distance: number;
+    minutesToArrival: number;
+    trendM15: 'ALCISTA' | 'BAJISTA';
+    ema50_M15: number;
+    consecutiveRetracementM1?: number;
+    note?: string | null;
+  }): Promise<boolean> {
+    const isBoom = data.direction === 'BUY' || data.symbol.includes('BOOM');
+    const cleanSymbol = data.symbol.toUpperCase();
+    const expectedTrend = isBoom ? 'ALCISTA' : 'BAJISTA';
+
+    // ── REGLA CRÍTICA USUARIO: "debe de estar en tendencia segun el indice" ──
+    // Boom DEBE ser ALCISTA. Crash DEBE ser BAJISTA. Si no coincide, NUNCA enviar.
+    if (data.trendM15 !== expectedTrend) {
+      this.logger.warn(
+        `[GAP SPIKE] Mensaje descartado: ${cleanSymbol} tendencia M15 es ${data.trendM15}, pero requiere ${expectedTrend} según el índice.`,
+      );
+      return false;
+    }
+
+    const actionLabel = isBoom ? 'BOOM BUY ZONAS' : 'CRASH SELL ZONAS';
+    const spikeType = isBoom ? 'SPIKE ALCISTA 🚀' : 'SPIKE BAJISTA 💥';
+    const alertKey = `GAP_SPIKE:${cleanSymbol}:${data.entryPrice.toFixed(2)}`;
+
+    // 1. Emitir alerta visual y sonora al centro de notificaciones / voz
+    try {
+      await this.publishCenterAlert({
+        type: 'GAP_SPIKE_ANTICIPATION',
+        symbol: cleanSymbol,
+        title: `🚨 Posible Spike en ${cleanSymbol}`,
+        message: `A ~2 min del Gap ${data.entryPrice.toFixed(2)} (${data.distance.toFixed(2)} pts) en retroceso. Tendencia M15 ${data.trendM15}.`,
+        speechText: `Atención. Posible spike en ${cleanSymbol}. Índice a dos minutos del Gap en retroceso con tendencia M15 a favor.`,
+        targetPath: '/crash-ia',
+        routeQuery: { symbol: cleanSymbol },
+        severity: 'warning',
+        dedupeKey: `CENTER:GAP:${cleanSymbol}:${data.entryPrice.toFixed(2)}:${Math.floor(Date.now() / 120_000)}`,
+      });
+    } catch (e: any) {
+      this.logger.debug(`Error emitiendo alerta interna de Gap: ${e?.message}`);
+    }
+
+    // 2. Enviar a Telegram
+    const token = (this.config.get<string>('TELEGRAM_BOT_TOKEN') || '').trim();
+    const chatId = (this.config.get<string>('TELEGRAM_CHAT_ID') || '').trim();
+    if (!token || !chatId) {
+      this.logger.warn('[GAP SPIKE] Telegram no configurado (TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID vacío).');
+      return false;
+    }
+
+    this.cleanupOldWindows();
+    const notificationKey = `TELEGRAM:${chatId}:${alertKey}`;
+    const now = Date.now();
+    if (this.notifiedWindows.has(notificationKey)) return false;
+    const lastAttempt = this.attemptedWindows.get(notificationKey) || 0;
+    // Cooldown de 30 minutos por nivel para no saturar si oscila cerca de 2 minutos
+    if (now - lastAttempt < 30 * 60_000) return false;
+    this.attemptedWindows.set(notificationKey, now);
+
+    // Candado distribuido en PostgreSQL para evitar duplicados entre Local y VPS
+    const claimed = await this.signalCenter.claimTelegramDispatch(notificationKey);
+    if (!claimed) {
+      this.logger.debug(`[TELEGRAM LOCK] Gap alert ${alertKey} ya despachada por otra instancia.`);
+      return false;
+    }
+
+    const checkedAt = new Intl.DateTimeFormat('es-CO', {
+      timeZone: 'America/Bogota',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date());
+
+    const retracementLine = data.consecutiveRetracementM1
+      ? `📉 *Retroceso M1:* *${data.consecutiveRetracementM1} velas ${isBoom ? 'rojas' : 'verdes'}* ✅ PEQUEÑO RETROCESO ACTIVO`
+      : `📉 *Retroceso:* ✅ Pequeño retroceso hacia el Gap`;
+
+    const message = [
+      `🚨 *POSIBLE SPIKE EN RETROCESO (GAP)* 🚨`,
+      `*Estrategia:* Zonas V y H1 · ${actionLabel}`,
+      `*Hora:* ${checkedAt} (Col)`,
+      ``,
+      `📊 *Índice:* *${cleanSymbol}*`,
+      `🎯 *Nivel Gap:* \`${data.entryPrice.toFixed(2)}\``,
+      `📍 *Precio Actual:* \`${data.currentPrice.toFixed(2)}\``,
+      `📏 *Distancia:* \`${data.distance.toFixed(2)} pts\``,
+      `⏳ *Tiempo Estimado:* *~2 MINUTOS ANTES* (~${data.minutesToArrival.toFixed(1)} min)`,
+      `📈 *Tendencia M15:* *${data.trendM15}* ✅ A FAVOR (${isBoom ? 'ALCISTA para BOOM' : 'BAJISTA para CRASH'} - EMA50: ${data.ema50_M15.toFixed(2)})`,
+      retracementLine,
+      ...(data.note ? [`📝 *Detalle:* ${data.note}`] : []),
+      ``,
+      `⚠️ *Acción:* El índice se aproxima al Gap en retroceso con tendencia M15 a favor. Preparar entrada para posible ${spikeType}.`,
+    ].join('\n');
+
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: message,
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true,
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      const result = (await response.json()) as { ok?: boolean; description?: string };
+      if (!response.ok || !result.ok) {
+        throw new Error(`Telegram error ${response.status}: ${result.description || 'desconocido'}`);
+      }
+
+      this.notifiedWindows.set(notificationKey, Date.now());
+      this.logger.log(`[GAP SPIKE] 🚨 Alerta de posible spike enviada a Telegram: ${cleanSymbol} Gap ${data.entryPrice.toFixed(2)}.`);
+      return true;
+    } catch (error: any) {
+      this.logger.error(`[GAP SPIKE] Error enviando alerta a Telegram: ${error?.message || error}`);
+      return false;
+    }
   }
 
   async notifyCrashBoomAlerts(
@@ -375,6 +502,13 @@ export class EvolutionCallService {
     if (now - lastAttempt < 30_000) return;
     this.attemptedWindows.set(notificationKey, now);
 
+    // Candado distribuido en PostgreSQL para evitar duplicados entre Local y VPS
+    const claimed = await this.signalCenter.claimTelegramDispatch(notificationKey);
+    if (!claimed) {
+      this.logger.debug(`[TELEGRAM LOCK] ${dedupeKey} ya despachado por otra instancia.`);
+      return;
+    }
+
     try {
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
@@ -452,23 +586,39 @@ export class EvolutionCallService {
   }
 
   private buildH1TextMessage(alerts: H1AnticipatedCallAlert[], targetHour: string): string {
-    const markets = [...new Map(
-      alerts.map((alert) => [alert.symbol, alert.mercado || alert.symbol]),
-    ).values()];
-    const marketLines = alerts.map((alert) => {
+    const isAnticipated = alerts.some((alert) => alert.isAnticipated);
+    const timingBadge = isAnticipated
+      ? '⚡ *Entrada Anticipada (Minuto 58 - 2 min antes del cierre)*'
+      : '🎯 *Cierre H1 Confirmado (Minuto 00)*';
+
+    const targetDate = new Date(targetHour);
+    const formattedHour = Number.isNaN(targetDate.getTime())
+      ? targetHour
+      : new Intl.DateTimeFormat('es-CO', {
+          timeZone: 'America/Bogota',
+          hour: 'numeric',
+          minute: '2-digit',
+        }).format(targetDate);
+
+    const alertSections = alerts.map((alert) => {
       const market = alert.mercado || alert.symbol;
-      const trend = alert.h4Trend && alert.h4Trend !== 'NEUTRAL'
-        ? ` - H4 ${alert.h4Trend}${alert.h4AgainstTrade ? ' (EN CONTRA)' : ''}`
-        : '';
-      return `- ${market}${trend}`;
-    });
-    const againstMarkets = alerts
-      .filter((alert) => alert.h4AgainstTrade)
-      .map((alert) => alert.mercado || alert.symbol);
-    const reactionLines = alerts
-      .filter((alert) => alert.historicalReaction?.found)
-      .map((alert) => {
-        const reaction = alert.historicalReaction!;
+      const isBoom = (alert.symbol || '').toUpperCase().includes('BOOM');
+      const action = isBoom ? 'BUY (COMPRA)' : 'SELL (VENTA)';
+      const candleColor = isBoom ? 'BAJISTA 🔴' : 'ALCISTA 🟢';
+
+      const lines = [
+        `📊 *Índice:* *${market}*`,
+        `📈 *Operación:* *${action}*`,
+        `🕯️ *Vela H1:* ${candleColor} cerrando *SIN MECHA* (Marubozu)`,
+      ];
+
+      if (alert.h4Trend && alert.h4Trend !== 'NEUTRAL') {
+        const warning = alert.h4AgainstTrade ? ' ⚠️ *(EN CONTRA)*' : ' ✅ *(A FAVOR)*';
+        lines.push(`🧭 *Tendencia H4:* ${alert.h4Trend}${warning}`);
+      }
+
+      if (alert.historicalReaction?.found) {
+        const reaction = alert.historicalReaction;
         const reactionDate = reaction.lastReactionAt
           ? new Intl.DateTimeFormat('es-CO', {
               timeZone: 'America/Bogota',
@@ -478,41 +628,23 @@ export class EvolutionCallService {
               minute: '2-digit',
             }).format(new Date(reaction.lastReactionAt))
           : 'sin fecha';
-        const countLabel = reaction.count === 1 ? '1 reaccion' : `${reaction.count} reacciones`;
-        return `- ${alert.mercado || alert.symbol}: ${countLabel} cerca de ${reaction.level}. Ultima: ${reactionDate}, ${reaction.lastDirection}, ${reaction.lastMovePoints} puntos.`;
-      });
-    const targetDate = new Date(targetHour);
-    const formattedHour = Number.isNaN(targetDate.getTime())
-      ? targetHour
-      : new Intl.DateTimeFormat('es-CO', {
-        timeZone: 'America/Bogota',
-        hour: 'numeric',
-        minute: '2-digit',
-      }).format(targetDate);
+        const countLabel = reaction.count === 1 ? '1 reacción' : `${reaction.count} reacciones`;
+        lines.push(
+          `🎯 *Reacción Histórica:* ${countLabel} cerca de \`${reaction.level}\` (Última: ${reactionDate}, ${reaction.lastDirection}, ${reaction.lastMovePoints} pts)`,
+        );
+      }
 
-    const timingMessage = alerts.some((alert) => alert.isAnticipated)
-      ? 'Posible entrada detectada 2 minutos antes del cierre.'
-      : 'Señal H1 confirmada al cierre de la vela.';
+      return lines.join('\n');
+    });
 
     return [
-      '*WEY TRADING - ALERTA H1*',
-      '',
-      timingMessage,
-      '',
-      markets.length === 1 ? '*Indice:*' : '*Indices:*',
-      ...marketLines,
-      '',
-      `Hora objetivo: ${formattedHour}`,
-      ...(againstMarkets.length
-        ? [
-            '',
-            `*ADVERTENCIA:* Evalua bien antes de operar; la tendencia H4 esta en contra para ${againstMarkets.join(', ')}.`,
-          ]
-        : []),
-      ...(reactionLines.length
-        ? ['', '*REACCION HISTORICA EN EL NIVEL:*', ...reactionLines]
-        : []),
-      'Revisa el grafico antes de operar.',
+      `🕯️ *WEY TRADING - ALERTA H1 SIN MECHA* 🕯️`,
+      timingBadge,
+      `⏰ *Hora Objetivo:* ${formattedHour} (Col)`,
+      ``,
+      ...alertSections,
+      ``,
+      `⚠️ *Acción:* Revisar gráfico en H1. Si la vela termina sin mecha, preparar entrada inmediata.`,
     ].join('\n');
   }
 

@@ -76,8 +76,8 @@ export class TradingBotService implements OnModuleInit {
   private lastM5XEvaluationAt = 0;
   private openingSymbolsInFlight = new Set<string>();
   private readonly h1AutoAuthorizedEmail = 'weimarsuber@gmail.com';
-  private readonly h1EvaluationMinutes = [13, 28, 43, 58];
-  private readonly h1ConfirmedEntryMinutes = [13, 28, 43, 58];
+  private readonly h1EvaluationMinutes = [58, 0];
+  private readonly h1ConfirmedEntryMinutes = [58, 0];
   private lastH1EvaluationMinuteKey = -1;
   private h1EvaluationInFlight = false;
   private lastH1AnalysisAt = 0;
@@ -282,7 +282,7 @@ export class TradingBotService implements OnModuleInit {
    * Si el precio está claramente encima de la EMA20 y queremos SELL → tendencia contraria → bloquear.
    * Usa velas M15 de la BD (granularity=900). Si no hay suficientes datos, permite la entrada por defecto.
    */
-  private async isTrendFavorable(symbol: string, direction: 'BUY' | 'SELL'): Promise<{
+  async isTrendFavorable(symbol: string, direction: 'BUY' | 'SELL'): Promise<{
     favorable: boolean;
     trendLabel: 'ALCISTA' | 'BAJISTA' | 'LATERAL';
     ema20: number;
@@ -667,15 +667,15 @@ export class TradingBotService implements OnModuleInit {
 
     // A. Evaluación Estrategia H1 Sin Mecha (Velas Marubozu)
     // H1 es una señal directa y no depende del cupo global de las otras estrategias.
+    const currentMin = now.getMinutes();
     const shouldEvaluateDashboard =
-      this.h1EvaluationMinutes.includes(now.getMinutes()) &&
+      this.h1EvaluationMinutes.includes(currentMin) &&
       this.lastDashboardEvaluationMinuteKey !== minuteKey;
-    const isH1ImmediateWindow = now.getMinutes() === 59 || now.getMinutes() <= 2;
-    const isH1ScheduledWindow = this.h1EvaluationMinutes.includes(now.getMinutes());
+    const isH1ScheduledWindow = currentMin === 58 || currentMin === 0;
 
-    // H1 se evalua en la ventana especial :59-:02 y en los minutos programados.
+    // H1 se evalúa ÚNICAMENTE en el minuto 58 (anticipada 2 min antes) o minuto 00 (cierre confirmado)
     if (
-      (isH1ImmediateWindow || isH1ScheduledWindow) &&
+      isH1ScheduledWindow &&
       Date.now() - this.lastH1AnalysisAt >= 5_000 &&
       !this.h1EvaluationInFlight
     ) {
@@ -819,27 +819,38 @@ export class TradingBotService implements OnModuleInit {
 
   private async evaluateH1Strategy(allowAutoTrading: boolean) {
     try {
-      const h1Analysis = await this.h1Service.analyzeAllIndices(2);
+      const currentMinute = new Date().getMinutes();
+      // Regla estricta usuario: Se evalúa y envía ÚNICAMENTE en minuto 58 anterior o minuto 00
+      if (currentMinute !== 58 && currentMinute !== 0) {
+        return false;
+      }
+
+      // tolerancePct = 0.05 para estricto Marubozu sin mecha
+      const h1Analysis = await this.h1Service.analyzeAllIndices(0.05);
       if (!h1Analysis || !Array.isArray(h1Analysis.activeAlerts)) return false;
       if (!h1Analysis.activeAlerts.length) return false;
 
-      if (h1Analysis.activeAlerts.length) {
-        const anticipatedAlerts = h1Analysis.activeAlerts.filter((alert) => alert.isAnticipated);
-        const confirmedAlerts = h1Analysis.activeAlerts.filter((alert) => !alert.isAnticipated);
-        const hourKey = Math.floor(Date.now() / 3_600_000);
+      const hourKey = Math.floor(Date.now() / 3_600_000);
+      const anticipatedAlerts = h1Analysis.activeAlerts.filter(
+        (alert) => alert.isAnticipated && currentMinute === 58,
+      );
+      const confirmedAlerts = h1Analysis.activeAlerts.filter(
+        (alert) => !alert.isAnticipated && currentMinute === 0,
+      );
 
-        if (anticipatedAlerts.length) {
-          void this.evolutionCallService.notifyH1Alerts(anticipatedAlerts, `anticipated-${hourKey}`).catch((err) => {
-            this.logger.error(`Error enviando alertas H1 anticipadas por WhatsApp: ${err?.message || err}`);
+      if (anticipatedAlerts.length) {
+        void this.evolutionCallService
+          .notifyH1Alerts(anticipatedAlerts, `anticipated-${hourKey}`)
+          .catch((err) => {
+            this.logger.error(`Error enviando alertas H1 anticipadas: ${err?.message || err}`);
           });
-        }
-        if (confirmedAlerts.length) {
-          void this.evolutionCallService
-            .notifyH1Alerts(confirmedAlerts, `confirmed-${hourKey}`)
-            .catch((err) => {
-              this.logger.error(`Error enviando alertas H1 confirmadas por WhatsApp: ${err?.message || err}`);
-            });
-        }
+      }
+      if (confirmedAlerts.length) {
+        void this.evolutionCallService
+          .notifyH1Alerts(confirmedAlerts, `confirmed-${hourKey}`)
+          .catch((err) => {
+            this.logger.error(`Error enviando alertas H1 confirmadas: ${err?.message || err}`);
+          });
       }
 
       // WhatsApp se notifica a todos los usuarios con telefono. H1 automatico
@@ -862,9 +873,6 @@ export class TradingBotService implements OnModuleInit {
       if (this.hasOpenH1Trade()) {
         return true;
       }
-
-      const currentMinute = new Date().getMinutes();
-      const isImmediateWindow = currentMinute === 59 || currentMinute <= 2;
 
       for (const alert of h1Analysis.activeAlerts) {
         if (!alert.symbol || this.hasOpenH1Trade()) continue;

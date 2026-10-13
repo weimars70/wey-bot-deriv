@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
@@ -6,16 +6,20 @@ import { WatchedEntryLevel } from './watched-level.entity';
 import { EvolutionCallService } from '../notifications/evolution-call.service';
 import { TradingBotService } from '../trading/trading-bot.service';
 import { TradeRecord } from '../trading/trade.entity';
+import { CrashIaStrategyService, SYMBOL_DRIFT_PER_MIN } from '../strategies/crash-ia-strategy.service';
 
 @Injectable()
 export class WatchedLevelsService implements OnModuleInit {
+  private readonly logger = new Logger(WatchedLevelsService.name);
   private readonly rearmedTradeIds = new Set<string>();
+  private readonly lastGapEvaluationAt = new Map<string, number>();
 
   constructor(
     @InjectRepository(WatchedEntryLevel)
     private readonly levels: Repository<WatchedEntryLevel>,
     private readonly whatsapp: EvolutionCallService,
     private readonly trading: TradingBotService,
+    private readonly crashIaService: CrashIaStrategyService,
   ) {}
 
   async onModuleInit() {
@@ -59,7 +63,15 @@ export class WatchedLevelsService implements OnModuleInit {
     const cleanSymbol = rawSymbol.replace(/[^A-Z0-9]/g, '');
     const normSymbol = this.trading.normalizeSymbol(rawSymbol);
 
-    // Solo evaluar o ejecutar si weimarsuber@gmail.com está activo en la app
+    // ── EVALUACIÓN AUTOMÁTICA DE GAP SPIKE TELEGRAM (2 MIN ANTES EN RETROCESO CON M15 A FAVOR) ──
+    // Se evalúa independientemente de si la ventana web está abierta para que la alerta a Telegram llegue siempre
+    try {
+      await this.evaluateGapSpikeAlerts(cleanSymbol, normSymbol, price);
+    } catch (err: any) {
+      this.logger.debug(`Error evaluando alerta Gap Spike para ${cleanSymbol}: ${err?.message}`);
+    }
+
+    // Solo evaluar o ejecutar trades automáticos si weimarsuber@gmail.com está activo en la app
     const isOnline = await this.trading.isUserAuthorizedOnline();
     if (!isOnline) return;
 
@@ -219,4 +231,129 @@ export class WatchedLevelsService implements OnModuleInit {
     level.multipleReactions = multipleReactions;
     return this.levels.save(level);
   }
+
+  /**
+   * Evalúa si el índice está en retroceso hacia un Gap vigilado y a ~2 minutos antes de llegar,
+   * con la temporalidad M15 a favor (Bullish para Boom / Bearish para Crash),
+   * enviando una alerta anticipada de posible Spike a Telegram.
+   */
+  private async evaluateGapSpikeAlerts(cleanSymbol: string, normSymbol: string, currentPrice: number) {
+    const isBoom = cleanSymbol.includes('BOOM');
+    const isCrash = cleanSymbol.includes('CRASH');
+    if (!isBoom && !isCrash) return;
+
+    // Throttling: evaluar gaps de este símbolo como máximo cada 1.5s
+    const now = Date.now();
+    const lastEval = this.lastGapEvaluationAt.get(cleanSymbol) || 0;
+    if (now - lastEval < 1500) return;
+    this.lastGapEvaluationAt.set(cleanSymbol, now);
+
+    const targetDirection: 'BUY' | 'SELL' = isBoom ? 'BUY' : 'SELL';
+
+    // 1. Obtener evaluación completa de la estrategia Crash & Boom IA (EMA50 M15 + Velas M1)
+    let iaEval: any = null;
+    try {
+      iaEval = await this.crashIaService.evaluateSymbol(cleanSymbol);
+    } catch (e: any) {
+      this.logger.debug(`Error obteniendo evaluación IA para ${cleanSymbol}: ${e?.message}`);
+      return;
+    }
+
+    if (!iaEval || !iaEval.filters) return;
+
+    const ema50_M15 = Number(iaEval.filters.ema50_M15) || 0;
+    const trendM15: 'ALCISTA' | 'BAJISTA' = iaEval.trendM15 || (isBoom ? (currentPrice >= ema50_M15 ? 'ALCISTA' : 'BAJISTA') : (currentPrice <= ema50_M15 ? 'BAJISTA' : 'ALCISTA'));
+    const requiredTrend = isBoom ? 'ALCISTA' : 'BAJISTA';
+
+    // ── REGLA CRÍTICA USUARIO: "debe de estar en tendencia segun el indice" ──
+    // BOOM (BUY) -> La tendencia M15 DEBE ser estrictamente ALCISTA (precio >= EMA50).
+    // CRASH (SELL) -> La tendencia M15 DEBE ser estrictamente BAJISTA (precio <= EMA50).
+    // Si la tendencia está en contra (ej: Boom en bajista o Crash en alcista), SE DESCARTA.
+    if (trendM15 !== requiredTrend || !iaEval.filters.trendOk) {
+      return;
+    }
+
+    // ── REGLA CRÍTICA USUARIO: "envia el aviso si hay un pequeño retroceso" ──
+    // En BOOM: Mínimo 2 velas rojas M1 de retroceso hacia el soporte/Gap
+    // En CRASH: Mínimo 2 velas verdes M1 de retroceso hacia la resistencia/Gap
+    const consecutiveRetracementM1 = isBoom
+      ? Number(iaEval.filters.consecutiveRedM1) || 0
+      : Number(iaEval.filters.consecutiveGreenM1) || 0;
+
+    if (consecutiveRetracementM1 < 2) {
+      // No está en retroceso continuo (ej: acaba de saltar un spike en contra del retroceso)
+      return;
+    }
+
+    // Buscar niveles vigilados pendientes con dirección correspondiente
+    const candidateLevels = await this.levels
+      .createQueryBuilder('lvl')
+      .where('lvl.status IN (:...statuses)', { statuses: ['PENDING', 'EVALUATING'] })
+      .andWhere('lvl.direction = :direction', { direction: targetDirection })
+      .andWhere(
+        "(UPPER(lvl.symbol) = :normSymbol OR REPLACE(UPPER(lvl.symbol), ' ', '') = :cleanSymbol OR :cleanSymbol LIKE CONCAT('%', REPLACE(UPPER(lvl.symbol), ' ', ''), '%'))",
+        { normSymbol, cleanSymbol }
+      )
+      .getMany();
+
+    if (!candidateLevels.length) return;
+
+    // Deduplicar niveles por precio redondeado a 2 decimales para evitar procesar filas idénticas
+    const seenPrices = new Set<string>();
+    const uniqueCandidateLevels = candidateLevels.filter((lvl) => {
+      const priceKey = Number(lvl.entryPrice).toFixed(2);
+      if (seenPrices.has(priceKey)) return false;
+      seenPrices.add(priceKey);
+      return true;
+    });
+
+    const drift = SYMBOL_DRIFT_PER_MIN[cleanSymbol] || 0.55;
+
+    for (const level of uniqueCandidateLevels) {
+      const gapPrice = Number(level.entryPrice);
+      if (!Number.isFinite(gapPrice) || gapPrice <= 0) continue;
+
+      const distance = Math.abs(currentPrice - gapPrice);
+
+      // 1. CONDICIÓN: En Retroceso hacia el Gap
+      // En BOOM (BUY): Precio debe estar por encima del Gap y retrocediendo hacia él
+      // En CRASH (SELL): Precio debe estar por debajo del Gap y retrocediendo hacia él
+      const inRetracement = isBoom ? currentPrice > gapPrice : currentPrice < gapPrice;
+      if (!inRetracement) continue;
+
+      // 2. CONDICIÓN: A ~2 minutos antes de llegar
+      // En retroceso continuo sin spike: distance / drift = tiempo en minutos
+      const minutesToArrival = drift > 0 ? distance / drift : 0;
+      // Ventana de ~2 minutos antes: entre 1.2 y 2.8 minutos
+      const isTwoMinutesBefore = minutesToArrival >= 1.2 && minutesToArrival <= 2.8;
+      if (!isTwoMinutesBefore) continue;
+
+      // Bloqueo compartido en base de datos para evitar duplicados entre servidor local y VPS
+      const nowSec = Math.floor(now / 1000);
+      const lastAlertMatch = (level.evaluationReason || '').match(/GAP_SPIKE_ALERTED:(\d+)/);
+      const lastAlertedSec = lastAlertMatch ? Number(lastAlertMatch[1]) : 0;
+      if (nowSec - lastAlertedSec < 1800) {
+        continue;
+      }
+
+      await this.levels.update(level.id, {
+        evaluationReason: `GAP_SPIKE_ALERTED:${nowSec} - ${level.evaluationReason || ''}`.slice(0, 250),
+      });
+
+      // 3. ENVÍO A TELEGRAM (con deduplicación distribuida en EvolutionCallService)
+      await this.whatsapp.notifyGapSpikeAlert({
+        symbol: level.symbol || cleanSymbol,
+        direction: targetDirection,
+        entryPrice: gapPrice,
+        currentPrice,
+        distance,
+        minutesToArrival,
+        trendM15,
+        ema50_M15,
+        consecutiveRetracementM1,
+        note: level.note || undefined,
+      });
+    }
+  }
 }
+

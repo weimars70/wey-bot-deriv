@@ -22,8 +22,8 @@ export default registerAs(
     synchronize: false,
     logging: false,
     extra: {
-      max: 10,
-      connectionTimeoutMillis: 10000,
+      max: 30,
+      connectionTimeoutMillis: 25000,
       idleTimeoutMillis: 30000,
     },
   }),

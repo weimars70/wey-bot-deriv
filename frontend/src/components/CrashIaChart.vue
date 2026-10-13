@@ -45,6 +45,20 @@
           </q-badge>
         </template>
 
+        <!-- Gaps Vigilados (Líneas horizontales punteadas) -->
+        <q-badge
+          v-if="gaps && gaps.length"
+          :color="isBoom ? 'cyan-1' : 'orange-1'"
+          :text-color="isBoom ? 'cyan-9' : 'orange-9'"
+          class="legend-pill font-mono cursor-pointer"
+          @click="toggleGaps"
+        >
+          <span class="legend-dot" :class="isBoom ? 'bg-cyan-7' : 'bg-orange-7'"></span>
+          {{ isBoom ? 'Gap BUY más cercano:' : 'Gap SELL más cercano:' }} {{ nearestGap ? formatNum(nearestGap.price) : '—' }}
+          <span v-if="nearestGap?.distToPrice" class="q-ml-xs text-caption">({{ formatNum(nearestGap.distToPrice) }} pts)</span>
+          <q-tooltip>Alternar líneas de los {{ gaps.length }} gaps vigilados en el gráfico</q-tooltip>
+        </q-badge>
+
         <!-- Trade Activo (Bot / Estrategia) -->
         <q-badge
           v-if="activeTrade"
@@ -118,6 +132,22 @@
           flat
           dense
           size="sm"
+          :color="showGaps ? (isBoom ? 'cyan-8' : 'orange-8') : 'grey-6'"
+          :icon="showGaps ? 'horizontal_rule' : 'visibility_off'"
+          :label="showGaps ? 'Gaps ON' : 'Gaps OFF'"
+          class="text-weight-bold"
+          @click="toggleGaps"
+        >
+          <q-tooltip>
+            {{ showGaps ? 'Ocultar líneas horizontales de Gaps' : 'Mostrar líneas horizontales de Gaps' }}
+          </q-tooltip>
+        </q-btn>
+
+
+        <q-btn
+          flat
+          dense
+          size="sm"
           color="slate-7"
           icon="center_focus_strong"
           label="Centrar"
@@ -179,6 +209,7 @@ const props = defineProps({
   obStatus: { type: String, default: '' },
   obEpoch: { type: Number, default: 0 },
   activeTrade: { type: Object, default: null },
+  gaps: { type: Array, default: () => [] },
 });
 
 const isBoom = computed(() => {
@@ -190,6 +221,18 @@ const isBoom = computed(() => {
 const chartContainer    = ref(null);
 const obOriginStyle     = ref(null);
 const showLabels        = ref(false); // Por defecto desactivado para que NUNCA tape las velas
+const showGaps          = ref(true);
+
+const nearestGap = computed(() => {
+  if (!props.gaps || !props.gaps.length) return null;
+  return props.gaps[0];
+});
+
+function toggleGaps() {
+  showGaps.value = !showGaps.value;
+  updatePriceLines();
+}
+
 let chart               = null;
 let candleSeries        = null;
 let priceLines          = [];
@@ -466,6 +509,35 @@ function updatePriceLines() {
       );
     }
   }
+  // 9. Líneas Horizontales de Gaps Vigilados (BOOM BUY / CRASH SELL)
+  if (showGaps.value && props.gaps && props.gaps.length > 0) {
+    const gapColor = boom ? '#06b6d4' : '#f97316';
+    const gapsToDraw = props.gaps.slice(0, 15);
+    for (let i = 0; i < gapsToDraw.length; i++) {
+      const g = gapsToDraw[i];
+      const p = Number(g.price);
+      if (p > 0) {
+        const isNearest = i === 0;
+        const lineTitle = boom ? `GAP BUY (${formatNum(p)})` : `GAP SELL (${formatNum(p)})`;
+        try {
+          priceLines.push(
+            candleSeries.createPriceLine({
+              price: p,
+              color: isNearest ? (boom ? '#00e5ff' : '#ff9100') : gapColor,
+              lineWidth: isNearest ? 2 : 1,
+              lineStyle: isNearest ? LineStyle.Dashed : LineStyle.Dotted,
+              axisLabelVisible: true,
+              // El gap más cercano SIEMPRE muestra su texto sobre la línea para comprobarlo al instante
+              title: (labelsOn || isNearest) ? `🎯 ${lineTitle}` : '',
+            })
+          );
+        } catch (e) {
+          console.warn('Error creating gap price line:', e);
+        }
+      }
+    }
+  }
+
 }
 
 function updateChartData(forceFit = false) {
@@ -667,6 +739,7 @@ watch(
 
 watch(
   () => [
+    props.gaps,
     props.h1Price,
     props.vLinePrice,
     props.boxFloor,

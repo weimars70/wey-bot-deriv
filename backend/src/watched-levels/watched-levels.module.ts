@@ -6,8 +6,15 @@ import { WatchedLevelsService } from './watched-levels.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { TradingModule } from '../trading/trading.module';
 
+import { CrashIaStrategyModule } from '../strategies/crash-ia-strategy.module';
+
 @Module({
-  imports: [TypeOrmModule.forFeature([WatchedEntryLevel]), NotificationsModule, TradingModule],
+  imports: [
+    TypeOrmModule.forFeature([WatchedEntryLevel]),
+    NotificationsModule,
+    TradingModule,
+    CrashIaStrategyModule,
+  ],
   controllers: [WatchedLevelsController],
   providers: [WatchedLevelsService],
 })

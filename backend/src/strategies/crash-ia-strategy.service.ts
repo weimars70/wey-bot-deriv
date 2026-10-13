@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { CandlesService } from '../candles/candles.service';
+import { WatchedEntryLevel } from '../watched-levels/watched-level.entity';
 
 export const CRASH_SYMBOLS = [
   { symbol: 'CRASH300N', name: 'Crash 300' },
@@ -18,6 +21,32 @@ export const BOOM_SYMBOLS = [
 ];
 
 export const CRASH_BOOM_IA_SYMBOLS = [...CRASH_SYMBOLS, ...BOOM_SYMBOLS];
+
+export const SYMBOL_DRIFT_PER_MIN: Record<string, number> = {
+  BOOM600: 0.51,
+  BOOM1000: 0.95,
+  BOOM500: 0.62,
+  BOOM900: 0.70,
+  BOOM300: 1.50,
+  BOOM300N: 1.50,
+  CRASH600: 0.97,
+  CRASH1000: 0.36,
+  CRASH500: 0.37,
+  CRASH900: 0.45,
+  CRASH300: 1.20,
+  CRASH300N: 1.20,
+};
+
+export interface CrashIaGapLevel {
+  id: string;
+  price: number;
+  direction: 'BUY' | 'SELL';
+  status: string;
+  note: string | null;
+  distToPrice: number;
+  inRetracement: boolean;
+  minutesToArrival: number;
+}
 
 export interface VPatternCandidate {
   epoch: number;
@@ -103,16 +132,21 @@ export interface CrashIaEvaluation {
     close: number;
   }[];
   timeframeSeconds: number;
+  gaps?: CrashIaGapLevel[];
 }
 
 @Injectable()
 export class CrashIaStrategyService {
   private readonly logger = new Logger(CrashIaStrategyService.name);
-  private readonly evaluationCacheTtlMs = 15 * 60 * 1000;
+  private readonly evaluationCacheTtlMs = 5 * 1000;
   private readonly evaluationCache = new Map<string, { expiresAt: number; value: CrashIaEvaluation }>();
   private readonly evaluationsInFlight = new Map<string, Promise<CrashIaEvaluation>>();
 
-  constructor(private readonly candlesService: CandlesService) {}
+  constructor(
+    private readonly candlesService: CandlesService,
+    @InjectRepository(WatchedEntryLevel)
+    private readonly watchedLevelsRepo: Repository<WatchedEntryLevel>,
+  ) {}
 
   private hasDoubleWickBodyPattern(candle: any): boolean {
     if (!candle || candle.body <= 0) return false;
@@ -381,6 +415,44 @@ export class CrashIaStrategyService {
       close: Number(c.close),
     }));
 
+    // 15. Gaps / Niveles vigilados para este símbolo (BOOM BUY / CRASH SELL)
+    let gaps: CrashIaGapLevel[] = [];
+    try {
+      const cleanSym = sym.replace(/[^A-Z0-9]/g, '');
+      const rawGaps = await this.watchedLevelsRepo
+        .createQueryBuilder('lvl')
+        .where('lvl.status IN (:...statuses)', { statuses: ['PENDING', 'EVALUATING'] })
+        .andWhere(
+          "(REPLACE(UPPER(lvl.symbol), ' ', '') = :cleanSym OR :cleanSym LIKE CONCAT('%', REPLACE(UPPER(lvl.symbol), ' ', ''), '%'))",
+          { cleanSym }
+        )
+        .getMany();
+
+      const drift = SYMBOL_DRIFT_PER_MIN[cleanSym] || 0.55;
+      gaps = rawGaps
+        .map((g) => {
+          const p = Number(g.entryPrice);
+          const dist = Math.abs(currentPrice - p);
+          // En BOOM: retroceso si precio está por encima cayendo hacia el gap
+          // En CRASH: retroceso si precio está por debajo subiendo hacia el gap
+          const inRetracement = isBoom ? currentPrice > p : currentPrice < p;
+          const minutesToArrival = drift > 0 ? parseFloat((dist / drift).toFixed(1)) : 0;
+          return {
+            id: g.id,
+            price: parseFloat(p.toFixed(3)),
+            direction: g.direction,
+            status: g.status,
+            note: g.note || null,
+            distToPrice: parseFloat(dist.toFixed(3)),
+            inRetracement,
+            minutesToArrival,
+          };
+        })
+        .sort((a, b) => a.distToPrice - b.distToPrice);
+    } catch (e: any) {
+      this.logger.debug(`Error cargando gaps para ${sym}: ${e?.message}`);
+    }
+
     return {
       symbol: sym,
       mercado,
@@ -419,6 +491,7 @@ export class CrashIaStrategyService {
       m5Viability,
       chartCandles,
       timeframeSeconds,
+      gaps,
       retestZone: {
         isInRetest: retestInfo.isInRetest,
         isReadyForEntry: retestInfo.isReadyForEntry,

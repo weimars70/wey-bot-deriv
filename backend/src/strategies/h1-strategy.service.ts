@@ -351,7 +351,7 @@ export class H1StrategyService {
 
   constructor(private readonly candlesService: CandlesService) {}
 
-  async analyzeAllIndices(tolerancePct = 0.2): Promise<H1StrategySummary> {
+  async analyzeAllIndices(tolerancePct = 0.05): Promise<H1StrategySummary> {
     const now = new Date();
     const nowEpoch = Math.floor(now.getTime() / 1000);
     const currentHourBucket = Math.floor(nowEpoch / 3600) * 3600;
@@ -387,7 +387,7 @@ export class H1StrategyService {
             const upperWick = parseFloat((isBullish ? high - close : high - open).toFixed(4));
             const lowerWick = parseFloat((isBullish ? open - low : close - low).toFixed(4));
 
-            const tolDist = (range * tolerancePct) / 100;
+            const tolDist = (range * Math.min(tolerancePct, 0.1)) / 100;
             const noUpperWick = upperWick <= 0.0001 || upperWick <= tolDist;
             const noLowerWick = lowerWick <= 0.0001 || lowerWick <= tolDist;
             const isNoWickBoth = noUpperWick && noLowerWick;
@@ -434,43 +434,47 @@ export class H1StrategyService {
             (isBoomSym && h4Trend === 'BAJISTA');
 
           // Regla estricta H1 sin mecha: CERO mecha por encima Y CERO mecha por debajo (isNoWickBoth)
-          // BOOM: Solo velas BAJISTAS sin mecha arriba ni abajo
-          // CRASH: Solo velas ALCISTAS sin mecha arriba ni abajo
+          // BOOM: Solo velas BAJISTAS (rojas) sin mecha arriba ni abajo
+          // CRASH: Solo velas ALCISTAS (verdes) sin mecha arriba ni abajo
           const isSignalCandle = (c: H1CandleAnalysis | null | undefined) => {
             if (!c) return false;
             if (!c.isNoWickBoth) return false;
             if (isBoomSym && c.isBullish) return false;
             if (isCrashSym && !c.isBullish) return false;
+            if (c.body < 0.5) return false;
             return true;
           };
 
-          // ── CIERRE ANTICIPADO H1 (1-2 MINUTOS ANTES DE :00) ──
-          // Si faltan 120 segundos (2 minutos) o menos para el cambio de hora,
-          // evaluamos la vela en curso que ya lleva 58+ minutos formándose sin mechas.
-          // Esto permite adelantarse al spike exacto que suele formarse en el minuto 59 o al segundo 00.
+          // ── REGLA CRÍTICA USUARIO: ──
+          // "quiero que se envie solo cuando la vela de h1 termine sin mecha y se envie en el minuto 58 anterior o al minuto 00"
+          const currentMinute = now.getMinutes();
           const inProgressCandle = analyzedCandles.find((c) => c.isInProgress);
-          const isAnticipatedWindow = secondsToNextHour <= 120 && secondsToNextHour > 0;
+
+          // 1. Minuto 58: vela en curso que lleva 58 min formándose sin mechas (anticipada 2 min antes de :00)
+          const isAnticipatedWindow = currentMinute === 58 && secondsToNextHour <= 120 && secondsToNextHour > 0;
           const isAnticipatedAlert =
             isAnticipatedWindow &&
             !!inProgressCandle &&
-            isSignalCandle(inProgressCandle) &&
-            inProgressCandle.body >= 0.5;
+            isSignalCandle(inProgressCandle);
 
+          // 2. Minuto 00: vela recién cerrada (hace <= 90 seg) que completó estrictamente sin mecha
           const latestCompletedCloseEpoch = latestCompleted ? latestCompleted.epoch + 3600 : 0;
-          const hasFreshCompletedCandle = latestCompletedCloseEpoch === currentHourBucket;
+          const secondsSinceClose = nowEpoch - latestCompletedCloseEpoch;
+          const hasFreshCompletedCandle = currentMinute === 0 && secondsSinceClose >= 0 && secondsSinceClose <= 90;
           const hasCompletedAlert =
             hasFreshCompletedCandle &&
             !!latestCompleted &&
             isSignalCandle(latestCompleted);
+
           const hasActiveAlert = isAnticipatedAlert || hasCompletedAlert;
 
           const targetCandle = isAnticipatedAlert ? inProgressCandle! : latestCompleted;
           const isAnticipated = isAnticipatedAlert;
 
           const activeAlertReason = isAnticipatedAlert
-            ? `Cierre ANTICIPADO H1 (a ${secondsToNextHour}s del cierre :00) sin mecha (cuerpo: ${inProgressCandle?.body} pts)`
+            ? `Cierre ANTICIPADO H1 (Minuto 58 - a ${secondsToNextHour}s del :00) sin mecha (cuerpo: ${inProgressCandle?.body} pts)`
             : hasCompletedAlert
-            ? `Cierre H1 a las ${latestCompleted?.hourStr} sin mecha (cuerpo: ${latestCompleted?.body} pts)`
+            ? `Cierre H1 CONFIRMADO a las ${latestCompleted?.hourStr} (Minuto 00) sin mecha (cuerpo: ${latestCompleted?.body} pts)`
             : null;
 
           const mercado = toMarketName(symbol);
