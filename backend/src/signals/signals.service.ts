@@ -552,6 +552,7 @@ const MTF_LABELS: Record<number, string> = { 900: '15m', 1800: '30m', 3600: '1h'
 function analyzeTimeframeHistory(
   rawCandles: { open: number; high: number; low: number; close: number; epoch: number }[],
   symbolClass: SymbolClass,
+  currentPrice?: number,
 ): TimeframeHistoryContext {
   const cutoffEpoch = Math.floor(Date.now() / 1000) - HISTORY_DAYS * 86400;
   const candles = [...rawCandles]
@@ -571,13 +572,51 @@ function analyzeTimeframeHistory(
   }
 
   const closes = candles.map((c) => Number(c.close));
+  if (currentPrice !== undefined && Number.isFinite(currentPrice) && currentPrice > 0) {
+    closes[closes.length - 1] = currentPrice;
+  }
+
   const fastPeriod = Math.min(9, Math.max(3, Math.floor(closes.length / 4)));
   const slowPeriod = Math.min(21, Math.max(fastPeriod + 2, Math.floor(closes.length / 2)));
   const fastSeries = ema(closes, fastPeriod);
   const slowSeries = ema(closes, slowPeriod);
   const fast = fastSeries[fastSeries.length - 1];
+  const prevFast = fastSeries.length >= 2 ? fastSeries[fastSeries.length - 2] : fast;
   const slow = slowSeries[slowSeries.length - 1];
-  const direction: SignalDirection = fast > slow ? 'COMPRA' : fast < slow ? 'VENTA' : 'NEUTRAL';
+  const lastPrice = closes[closes.length - 1];
+
+  let direction: SignalDirection = 'NEUTRAL';
+  if (symbolClass === 'boom') {
+    // Para BOOM:
+    // Si el precio cae por debajo de la EMA rápida y la EMA rápida apunta hacia abajo -> fase bajista (retroceso)
+    if (lastPrice < fast && fast < prevFast) {
+      direction = 'VENTA';
+    } else if (lastPrice < slow && fast <= slow) {
+      direction = 'VENTA';
+    } else if (fast > slow && lastPrice >= fast) {
+      direction = 'COMPRA';
+    } else if (fast > slow && lastPrice >= slow) {
+      direction = 'COMPRA';
+    } else {
+      direction = fast > slow ? 'COMPRA' : 'VENTA';
+    }
+  } else if (symbolClass === 'crash') {
+    // Para CRASH:
+    // Si el precio sube por encima de la EMA rápida y la EMA rápida apunta hacia arriba -> fase alcista (retroceso/acumulación)
+    if (lastPrice > fast && fast > prevFast) {
+      direction = 'COMPRA';
+    } else if (lastPrice > slow && fast >= slow) {
+      direction = 'COMPRA';
+    } else if (fast < slow && lastPrice <= fast) {
+      direction = 'VENTA';
+    } else if (fast < slow && lastPrice <= slow) {
+      direction = 'VENTA';
+    } else {
+      direction = fast < slow ? 'VENTA' : 'COMPRA';
+    }
+  } else {
+    direction = fast > slow ? 'COMPRA' : fast < slow ? 'VENTA' : 'NEUTRAL';
+  }
 
   const ranges = candles
     .map((c) => Math.max(0, Number(c.high) - Number(c.low)))
@@ -724,7 +763,7 @@ export class SignalsService implements OnModuleInit {
           mtfH4Raw = mtfRaw;
         }
         const label = MTF_LABELS[g] ?? `${g}s`;
-        const context = analyzeTimeframeHistory(mtfRaw, base.symbolClass);
+        const context = analyzeTimeframeHistory(mtfRaw, base.symbolClass, base.entry);
         return { label, context };
       }),
     );
@@ -769,15 +808,16 @@ export class SignalsService implements OnModuleInit {
       const emaH4Series = ema(closesH4, periodH4);
       const emaH4 = emaH4Series[emaH4Series.length - 1];
       const lastH4Close = closesH4[closesH4.length - 1];
+      const refPriceH4 = base.entry > 0 ? base.entry : lastH4Close;
 
       if (base.symbolClass === 'crash') {
-        macroTrendH4 = lastH4Close < emaH4 ? 'BAJISTA' : 'ALCISTA';
+        macroTrendH4 = refPriceH4 < emaH4 ? 'BAJISTA' : 'ALCISTA';
         macroTrendH4Ok = macroTrendH4 === 'BAJISTA';
       } else if (base.symbolClass === 'boom') {
-        macroTrendH4 = lastH4Close > emaH4 ? 'ALCISTA' : 'BAJISTA';
+        macroTrendH4 = refPriceH4 > emaH4 ? 'ALCISTA' : 'BAJISTA';
         macroTrendH4Ok = macroTrendH4 === 'ALCISTA';
       } else {
-        macroTrendH4 = lastH4Close > emaH4 ? 'ALCISTA' : 'BAJISTA';
+        macroTrendH4 = refPriceH4 > emaH4 ? 'ALCISTA' : 'BAJISTA';
         macroTrendH4Ok = base.direction === 'COMPRA' ? macroTrendH4 === 'ALCISTA' : macroTrendH4 === 'BAJISTA';
       }
     }
@@ -794,15 +834,16 @@ export class SignalsService implements OnModuleInit {
       const ema50Series = ema(closes15, period15);
       const ema50 = ema50Series[ema50Series.length - 1];
       const last15Close = closes15[closes15.length - 1];
+      const refPrice15 = base.entry > 0 ? base.entry : last15Close;
 
       if (base.symbolClass === 'crash') {
-        macroTrend = last15Close < ema50 ? 'BAJISTA' : 'ALCISTA';
+        macroTrend = refPrice15 < ema50 ? 'BAJISTA' : 'ALCISTA';
         macroTrendOk = macroTrend === 'BAJISTA';
       } else if (base.symbolClass === 'boom') {
-        macroTrend = last15Close > ema50 ? 'ALCISTA' : 'BAJISTA';
+        macroTrend = refPrice15 > ema50 ? 'ALCISTA' : 'BAJISTA';
         macroTrendOk = macroTrend === 'ALCISTA';
       } else {
-        macroTrend = last15Close > ema50 ? 'ALCISTA' : 'BAJISTA';
+        macroTrend = refPrice15 > ema50 ? 'ALCISTA' : 'BAJISTA';
         macroTrendOk = base.direction === 'COMPRA' ? macroTrend === 'ALCISTA' : macroTrend === 'BAJISTA';
       }
 
