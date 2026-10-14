@@ -149,7 +149,6 @@
             <div class="row items-center justify-between q-pa-sm bg-slate-100 border-t-slate">
               <div class="row items-center q-gutter-xs">
                 <q-btn
-                  v-if="userPrefs.crashBoomIa"
                   flat
                   dense
                   size="sm"
@@ -158,9 +157,7 @@
                   class="text-weight-bold"
                   @click="router.push('/crash-ia')"
                 />
-                <span v-if="userPrefs.crashBoomIa && userPrefs.h1NoWick" class="text-slate-300">|</span>
                 <q-btn
-                  v-if="userPrefs.h1NoWick"
                   flat
                   dense
                   size="sm"
@@ -196,13 +193,12 @@
 
     <q-drawer v-model="drawer" bordered>
       <q-list>
-        <!-- Dashboard general solo visible si hay más de 1 estrategia activa -->
-        <q-item v-if="activeStrategiesCount > 1" clickable to="/dashboard" exact>
+        <q-item clickable to="/dashboard" exact>
           <q-item-section avatar><q-icon name="dashboard" /></q-item-section>
           <q-item-section>Dashboard</q-item-section>
         </q-item>
 
-        <q-item v-if="userPrefs.crashBoomIa" clickable to="/crash-ia">
+        <q-item clickable to="/crash-ia">
           <q-item-section avatar><q-icon name="insights" color="purple-7" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
@@ -212,7 +208,7 @@
           </q-item-section>
         </q-item>
 
-        <q-item v-if="userPrefs.spikePatterns" clickable to="/spike-strategy">
+        <q-item clickable to="/spike-strategy">
           <q-item-section avatar><q-icon name="bolt" color="amber-5" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
@@ -222,7 +218,7 @@
           </q-item-section>
         </q-item>
 
-        <q-item v-if="userPrefs.h1NoWick" clickable to="/h1-strategy">
+        <q-item clickable to="/h1-strategy">
           <q-item-section avatar><q-icon name="candlestick_chart" color="indigo-7" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
@@ -232,8 +228,7 @@
           </q-item-section>
         </q-item>
 
-        <!-- Informe Diario solo visible si hay más de 1 estrategia activa -->
-        <q-item v-if="activeStrategiesCount > 1" clickable to="/daily-report">
+        <q-item clickable to="/daily-report">
           <q-item-section avatar><q-icon name="query_stats" color="emerald-5" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
@@ -260,7 +255,7 @@
           <q-item-section>Usuarios</q-item-section>
         </q-item>
 
-        <q-item v-else clickable to="/update-profile">
+        <q-item clickable to="/update-profile">
           <q-item-section avatar><q-icon name="manage_accounts" color="primary" /></q-item-section>
           <q-item-section>Actualizar datos</q-item-section>
         </q-item>
@@ -279,7 +274,7 @@
             <q-btn flat dense round icon="close" color="white" v-close-popup />
           </div>
           <div class="text-caption text-grey-4 q-mt-xs">
-            Selecciona las estrategias que deseas operar y monitorear. Las opciones del menú, alertas sonoras y locución de voz se activarán exclusivamente para las estrategias que elijas.
+            Selecciona las estrategias que deseas operar y monitorear. Esta selección controla las señales y notificaciones, pero no oculta las opciones del menú.
           </div>
         </q-card-section>
 
