@@ -28,6 +28,9 @@ export interface WeySignal {
   structureOk: boolean;
   candlesSinceLastSpike: number;
   avgReactionCandles: number;
+  recentSpikesCount?: number;
+  pullbackPct?: number;
+  inOrderBlockZone?: boolean;
   viable: boolean;
   viabilityReason: string;
   historyContext?: SignalResult['historyContext'];
@@ -280,6 +283,9 @@ export class WeySignalsService {
       structureOk: r.structureOk,
       candlesSinceLastSpike: r.candlesSinceLastSpike,
       avgReactionCandles: r.avgReactionCandles,
+      recentSpikesCount: r.recentSpikesCount,
+      pullbackPct: r.pullbackPct,
+      inOrderBlockZone: r.inOrderBlockZone,
       viable: r.viable,
       viabilityReason: r.viabilityReason,
       historyContext: r.historyContext,

@@ -6,10 +6,10 @@
         <div>
           <div class="wey-title row items-center q-gutter-xs">
             <span>⚡ Wey Trading · Sala de Operaciones</span>
-            <span class="wey-tag">MOTOR LOCAL</span>
+            <span class="wey-tag">MOTOR SNIPER</span>
           </div>
           <div class="section-sub">
-            Contexto de hasta 90 días · 4H, 1H, 30M y 15M · ordenado por estrellas
+            Filtro institucional estricto: Order Block (30%–85%) · Estructura M15 · Confluencia 4H+1H+15M · Recorrido ≤ 45%
             <span v-if="lastWeyUpdate" class="q-ml-xs">
               · calculado {{ lastWeyUpdateTime }}
             </span>
@@ -18,6 +18,13 @@
       </div>
 
       <div class="row items-center q-gutter-sm">
+        <div v-if="rawWeySignals.length" class="evaluation-clock-pill row items-center q-px-sm q-py-xs">
+          <span class="text-caption text-weight-bold text-slate-700">
+            Viables: <span class="text-positive text-weight-bolder">{{ viableCount }}</span>/{{ rawWeySignals.length }}
+            · Sniper 4★: <span class="text-amber-9 text-weight-bolder">{{ sniperCount }}</span>
+          </span>
+        </div>
+
         <!-- Reloj anticipado dos minutos antes de cada cuarto de hora -->
         <div class="evaluation-clock-pill row items-center q-px-sm q-py-xs">
           <q-icon name="timer" size="14px" class="q-mr-xs text-indigo-7" />
@@ -34,10 +41,21 @@
           label="Solo Viables"
           class="text-caption text-weight-bold text-slate-700"
         >
-          <q-tooltip>Oculta entradas sin confluencia macro, reacción histórica o enfriamiento suficiente</q-tooltip>
+          <q-tooltip>Exige Order Block activo (30%–85%), estructura M15 limpia, ≥2 spikes/3h, 4H+1H+15M alineados y recorrido ≤45%</q-tooltip>
         </q-toggle>
 
         <q-toggle
+          v-model="onlySniperFourStars"
+          color="amber-9"
+          dense
+          label="Solo 4★ Sniper"
+          class="text-caption text-weight-bold text-slate-700"
+        >
+          <q-tooltip>Muestra únicamente entradas 4★ con alineación perfecta 4/4, OB activo, ≥3 spikes/3h y R/B ≥8.5</q-tooltip>
+        </q-toggle>
+
+        <q-toggle
+          v-if="!onlySniperFourStars"
           v-model="onlyThreeStars"
           color="indigo-7"
           dense
@@ -86,23 +104,32 @@
     >
       <q-icon name="stars" size="44px" color="amber-7" />
       <div class="text-subtitle1 text-weight-bold text-slate-800 q-mt-sm">
-        No hay señales Wey viables en este momento
+        No hay señales Wey {{ onlySniperFourStars ? '4★ Sniper' : 'viables' }} en este momento
       </div>
       <div class="text-caption text-slate-500 q-mt-xs">
-        El motor Wey verifica tendencia macro M15 (EMA 50), estructura y enfriamiento de spikes. Las entradas no viables se ocultan para proteger tu capital.
+        El motor Sniper filtra entradas sin Order Block activo (30%–85%), sin estructura M15 limpia, con recorrido agotado (&gt;45%) o en mercados fríos (&lt;2 spikes en 3h).
       </div>
       <div class="row items-center justify-center q-gutter-sm q-mt-md">
+        <q-btn
+          v-if="onlySniperFourStars"
+          outline
+          dense
+          color="amber-9"
+          label="Ver también señales 3★ viables"
+          class="q-px-sm text-weight-bold"
+          @click="onlySniperFourStars = false"
+        />
         <q-btn
           v-if="onlyViable"
           outline
           dense
           color="primary"
-          label="Ver todas (incluyendo no viables)"
+          label="Ver diagnóstico de todos los índices (incl. no viables)"
           class="q-px-sm text-weight-bold"
-          @click="onlyViable = false"
+          @click="onlyViable = false; onlySniperFourStars = false; onlyThreeStars = false"
         />
         <q-btn
-          v-if="onlyThreeStars"
+          v-if="onlyThreeStars && !onlyViable"
           flat
           dense
           color="slate-700"
@@ -132,15 +159,19 @@ import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { weySignalsService } from 'src/services/weySignals.service';
 import WeySignalCard from 'src/components/WeySignalCard.vue';
 
-const weyLoading        = ref(false);
-const rawWeySignals     = ref([]);
-const lastWeyUpdate     = ref(null);
-const onlyThreeStars    = ref(true);
-const onlyViable        = ref(true);
-const countdownText     = ref('00:00');
-const nextEvaluationTime = ref('');
-let countdownTimer       = null;
+const weyLoading          = ref(false);
+const rawWeySignals       = ref([]);
+const lastWeyUpdate       = ref(null);
+const onlyThreeStars      = ref(true);
+const onlySniperFourStars = ref(false);
+const onlyViable          = ref(true);
+const countdownText       = ref('00:00');
+const nextEvaluationTime  = ref('');
+let countdownTimer        = null;
 let lastScheduledEvaluationKey = null;
+
+const viableCount = computed(() => rawWeySignals.value.filter((s) => s.viable).length);
+const sniperCount = computed(() => rawWeySignals.value.filter((s) => s.viable && (s.estrellas ?? 0) >= 4).length);
 
 const lastWeyUpdateTime = computed(() => {
   if (!lastWeyUpdate.value) return '';
@@ -182,7 +213,9 @@ const weySignalsList = computed(() => {
   if (onlyViable.value) {
     list = list.filter((s) => s.viable);
   }
-  if (onlyThreeStars.value) {
+  if (onlySniperFourStars.value) {
+    list = list.filter((s) => (s.estrellas ?? 0) >= 4);
+  } else if (onlyThreeStars.value) {
     list = list.filter((s) => (s.estrellas ?? 0) >= 3);
   }
   return [...list].sort((a, b) => {

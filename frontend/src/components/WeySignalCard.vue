@@ -5,6 +5,9 @@
       <div class="row items-center q-gutter-xs">
         <span class="wey-card__market">{{ signal.mercado }}</span>
         <span class="wey-badge-pill">WEY</span>
+        <span v-if="signal.viable && signal.estrellas >= 4" class="wey-sniper-pill">
+          🎯 SNIPER
+        </span>
       </div>
       <span class="wey-card__dir-badge" :class="dirClass">
         {{ signal.direccion }}
@@ -69,12 +72,22 @@
       </div>
       <div class="row items-center q-gutter-xs">
         <div
-          v-if="signal.historicalReactionFrames !== undefined"
+          v-if="signal.pullbackPct !== undefined"
           class="wey-reaction-stat"
-          :title="historyContextTitle"
+          :class="signal.inOrderBlockZone ? 'ob--active' : ''"
+          :title="`Retroceso actual hacia el Order Block del último spike: ${signal.pullbackPct}% (zona ideal 30%–85%)`"
+        >
+          <span class="text-caption text-weight-bold">
+            OB {{ signal.pullbackPct }}%
+          </span>
+        </div>
+        <div
+          v-if="signal.recentSpikesCount !== undefined"
+          class="wey-reaction-stat"
+          :title="`Spikes institucionales detectados en las últimas 3 horas en 5M: ${signal.recentSpikesCount}`"
         >
           <span class="text-caption text-weight-bold text-slate-700">
-            Hist {{ signal.historicalReactionFrames }}/4
+            {{ signal.recentSpikesCount }} spk/3h
           </span>
         </div>
         <div
@@ -83,7 +96,7 @@
           :title="`Velas 5M acumuladas sin spike (${signal.candlesSinceLastSpike}) vs media histórica (${signal.avgReactionCandles})`"
         >
           <span class="text-caption text-weight-bold text-slate-700">
-            {{ signal.candlesSinceLastSpike }} / {{ signal.avgReactionCandles }}v
+            {{ signal.candlesSinceLastSpike }}/{{ signal.avgReactionCandles }}v
           </span>
         </div>
       </div>
@@ -106,9 +119,13 @@
       </div>
     </div>
 
-    <!-- Motivo si no es viable -->
-    <div v-if="!signal.viable && signal.viabilityReason" class="wey-card__reason text-caption text-negative q-mb-xs">
-      ⚠️ {{ signal.viabilityReason }}
+    <!-- Motivo de viabilidad / rechazo -->
+    <div
+      v-if="signal.viabilityReason"
+      class="wey-card__reason text-caption q-mb-xs"
+      :class="signal.viable ? 'wey-card__reason--ok text-positive' : 'text-negative'"
+    >
+      {{ signal.viable ? '✅' : '⚠️' }} {{ signal.viabilityReason }}
     </div>
 
     <!-- ── Sesgo / alineación ─────────────────────────────── -->
@@ -443,6 +460,23 @@ const timeAgo = computed(() => {
   border: 1px solid #e2e8f0;
 }
 
+.wey-reaction-stat.ob--active {
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #6ee7b7;
+}
+
+.wey-sniper-pill {
+  font-size: 9px;
+  font-weight: 800;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.4px;
+}
+
 /* ── MTF Chips ─────────────────────────────────────────────────────────────── */
 .wey-card__mtf {
   background: #f8fafc;
@@ -487,6 +521,11 @@ const timeAgo = computed(() => {
   border-radius: 4px;
   border: 1px solid #fecaca;
   line-height: 1.2;
+}
+
+.wey-card__reason--ok {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
 }
 
 /* ── Footer ────────────────────────────────────────────────────────────────── */

@@ -33,6 +33,9 @@ export interface SignalResult {
   structureOk: boolean;
   candlesSinceLastSpike: number;
   avgReactionCandles: number;
+  recentSpikesCount?: number;
+  pullbackPct?: number;
+  inOrderBlockZone?: boolean;
   viable: boolean;
   viabilityReason: string;
   historyContext?: Record<string, TimeframeHistoryContext>;
@@ -362,40 +365,104 @@ function calcSpikeStats(
   candles: { open: number; high: number; low: number; close: number }[],
   direction: 'CRASH' | 'BOOM' | 'OTHER',
   typicalM1Size: number,
-): { candlesSinceLastSpike: number; lastSpikeIdx: number } {
-  if (candles.length === 0) return { candlesSinceLastSpike: 0, lastSpikeIdx: -1 };
+): {
+  candlesSinceLastSpike: number;
+  lastSpikeIdx: number;
+  recentSpikesCount: number;
+  pullbackPct: number;
+  inOrderBlockZone: boolean;
+  obInvalidated: boolean;
+} {
+  if (candles.length === 0) {
+    return {
+      candlesSinceLastSpike: 0,
+      lastSpikeIdx: -1,
+      recentSpikesCount: 0,
+      pullbackPct: 0,
+      inOrderBlockZone: false,
+      obInvalidated: false,
+    };
+  }
 
-  // Un spike en Crash/Boom mide al menos 2.2 veces la vela normal de acumulación
-  const spikeThreshold = Math.max(typicalM1Size * 2.2, 0.001);
+  // Un spike institucional en Crash/Boom mide al menos 2.3 veces la vela normal de acumulación
+  const spikeThreshold = Math.max(typicalM1Size * 2.3, 0.001);
   let lastSpikeIdx = -1;
+  let recentSpikesCount = 0;
+  // Ventana de 3 horas en 5M (36 velas) para medir frecuencia activa de reacción
+  const recentWindowStart = Math.max(0, candles.length - 36);
 
   for (let i = candles.length - 1; i >= 0; i--) {
     const c = candles[i];
+    let isSpike = false;
     if (direction === 'CRASH') {
       const drop = c.open - c.close;
-      if (drop >= spikeThreshold) {
-        lastSpikeIdx = i;
-        break;
-      }
+      if (drop >= spikeThreshold) isSpike = true;
     } else if (direction === 'BOOM') {
       const jump = c.close - c.open;
-      if (jump >= spikeThreshold) {
-        lastSpikeIdx = i;
-        break;
-      }
+      if (jump >= spikeThreshold) isSpike = true;
     } else {
       const range = c.high - c.low;
-      if (range >= spikeThreshold * 2) {
-        lastSpikeIdx = i;
-        break;
-      }
+      if (range >= spikeThreshold * 2) isSpike = true;
+    }
+
+    if (isSpike) {
+      if (lastSpikeIdx === -1) lastSpikeIdx = i;
+      if (i >= recentWindowStart) recentSpikesCount++;
     }
   }
 
   const candlesSinceLastSpike =
     lastSpikeIdx >= 0 ? candles.length - 1 - lastSpikeIdx : candles.length;
 
-  return { candlesSinceLastSpike, lastSpikeIdx };
+  // Evaluar retroceso (Pullback) hacia el Order Block del último impulso/spike
+  let pullbackPct = 0;
+  let inOrderBlockZone = false;
+  let obInvalidated = false;
+  const currentPrice = candles[candles.length - 1].close;
+
+  if (lastSpikeIdx >= 0) {
+    const spikeCandle = candles[lastSpikeIdx];
+    const prevCandle = lastSpikeIdx > 0 ? candles[lastSpikeIdx - 1] : spikeCandle;
+
+    if (direction === 'CRASH') {
+      // Techo de origen del spike (Order Block bajista) y suelo alcanzado tras el spike
+      const originHigh = Math.max(spikeCandle.high, prevCandle.high);
+      const postSpikeLows = candles.slice(lastSpikeIdx).map((c) => c.low);
+      const impulseLow = Math.min(spikeCandle.low, ...postSpikeLows);
+      const impulseSpan = originHigh - impulseLow;
+
+      if (impulseSpan > 0) {
+        pullbackPct = Math.round(((currentPrice - impulseLow) / impulseSpan) * 100);
+        // Zona institucional de venta (Order Block / Fibonacci 30% a 85% del spike)
+        inOrderBlockZone = pullbackPct >= 30 && pullbackPct <= 85;
+        // Si el precio supera el origen del spike + pequeño margen, la estructura bajista del spike falló
+        obInvalidated = currentPrice > originHigh + typicalM1Size * 0.35;
+      }
+    } else if (direction === 'BOOM') {
+      // Piso de origen del spike (Order Block alcista) y techo alcanzado tras el spike
+      const originLow = Math.min(spikeCandle.low, prevCandle.low);
+      const postSpikeHighs = candles.slice(lastSpikeIdx).map((c) => c.high);
+      const impulseHigh = Math.max(spikeCandle.high, ...postSpikeHighs);
+      const impulseSpan = impulseHigh - originLow;
+
+      if (impulseSpan > 0) {
+        pullbackPct = Math.round(((impulseHigh - currentPrice) / impulseSpan) * 100);
+        // Zona institucional de compra (Order Block / Fibonacci 30% a 85% del spike)
+        inOrderBlockZone = pullbackPct >= 30 && pullbackPct <= 85;
+        // Si el precio perfora el origen del spike - pequeño margen, la estructura alcista del spike falló
+        obInvalidated = currentPrice < originLow - typicalM1Size * 0.35;
+      }
+    }
+  }
+
+  return {
+    candlesSinceLastSpike,
+    lastSpikeIdx,
+    recentSpikesCount,
+    pullbackPct,
+    inOrderBlockZone,
+    obInvalidated,
+  };
 }
 
 // ─── Core signal computation ─────────────────────────────────────────────────
@@ -404,7 +471,7 @@ function computeSignalFromCandles(
   rawCandles: { open: number; high: number; low: number; close: number; epoch: number }[],
   symbol: string,
   granularity: number,
-): Omit<SignalResult, 'alignment' | 'alignmentDetail'> {
+): Omit<SignalResult, 'alignment' | 'alignmentDetail'> & { obInvalidated?: boolean } {
   const symClass = getSymbolClass(symbol);
   const benchmark = getSpikeBenchmark(symbol);
 
@@ -430,6 +497,10 @@ function computeSignalFromCandles(
       structureOk: false,
       candlesSinceLastSpike: 0,
       avgReactionCandles: benchmark,
+      recentSpikesCount: 0,
+      pullbackPct: 0,
+      inOrderBlockZone: false,
+      obInvalidated: false,
       viable: false,
       viabilityReason: 'Datos insuficientes',
       insufficientData: true,
@@ -456,7 +527,22 @@ function computeSignalFromCandles(
   const bbRange  = bb.upper - bb.lower;
   const posInBB  = bbRange > 0 ? (entry - bb.lower) / bbRange : 0.5;
 
-  // ── Confluence & Stars ───────────────────────────────────────────────────
+  // ── Estadísticas de Spikes y Order Block antes de puntuar estrellas ──────
+  const typicalM1 = calcTypicalM1Size(sorted, atrVal);
+  const spikeStats = calcSpikeStats(
+    sorted,
+    symClass === 'crash' ? 'CRASH' : symClass === 'boom' ? 'BOOM' : 'OTHER',
+    typicalM1,
+  );
+  const {
+    candlesSinceLastSpike,
+    recentSpikesCount,
+    pullbackPct,
+    inOrderBlockZone,
+    obInvalidated,
+  } = spikeStats;
+
+  // ── Confluence & Stars (Lógica Sniper: premia reacción activa + pullback a OB, castiga tendencia sin spikes) ──
   let direction: SignalDirection;
   let stars: number;
 
@@ -464,42 +550,46 @@ function computeSignalFromCandles(
     direction = 'VENTA';
     let votes = 0;
 
-    // 1. RSI de sobrecompra (en Crash, subida = acumulación para spike bajista)
-    if (rsiVal >= 55) votes++;
-    if (rsiVal >= 68) votes++;
+    // 1. Frecuencia de spikes activa en las últimas 3h (el mercado SÍ está reaccionando)
+    if (recentSpikesCount >= 2) votes++;
+    if (recentSpikesCount >= 4) votes++;
 
-    // 2. Bollinger: precio en zona media-alta del canal
-    if (posInBB >= 0.52) votes++;
+    // 2. Precio en zona institucional de retroceso (Order Block 30%-85% del último spike) y sin invalidar techo
+    if (inOrderBlockZone && !obInvalidated) votes += 2;
 
-    // 3. Acumulación: últimas velas M1 verdes/alcistas antes del spike
-    const last5 = sorted.slice(-5);
-    const greenCount = last5.filter((c) => c.close >= c.open).length;
-    if (greenCount >= 3) votes++;
+    // 3. Ventana óptima de enfriamiento (entre 2 velas y 1.15x la media del índice)
+    if (candlesSinceLastSpike >= 2 && candlesSinceLastSpike <= Math.ceil(benchmark * 1.15)) {
+      votes++;
+    }
 
-    // 4. Momentum / cruce favorable para entrada
-    if (macdVal.histogram > 0 || lastEma9 > lastEma21) votes++;
+    // 4. RSI en zona de descuento saludable para recarga bajista (48-74), penalizando sobre-extensión alcista (>78)
+    if (rsiVal >= 48 && rsiVal <= 74 && posInBB >= 0.40 && posInBB <= 0.88) {
+      votes++;
+    }
 
-    stars = Math.min(4, Math.max(1, Math.round((votes / 5) * 4)));
+    stars = Math.min(4, Math.max(1, Math.round((votes / 6) * 4)));
   } else if (symClass === 'boom') {
     direction = 'COMPRA';
     let votes = 0;
 
-    // 1. RSI de sobreventa (en Boom, caída = acumulación para spike alcista)
-    if (rsiVal <= 45) votes++;
-    if (rsiVal <= 32) votes++;
+    // 1. Frecuencia de spikes activa en las últimas 3h (el mercado SÍ está reaccionando)
+    if (recentSpikesCount >= 2) votes++;
+    if (recentSpikesCount >= 4) votes++;
 
-    // 2. Bollinger: precio en zona media-baja del canal
-    if (posInBB <= 0.48) votes++;
+    // 2. Precio en zona institucional de retroceso (Order Block 30%-85% del último spike) y sin invalidar piso
+    if (inOrderBlockZone && !obInvalidated) votes += 2;
 
-    // 3. Acumulación: últimas velas M1 rojas/bajistas antes del spike
-    const last5 = sorted.slice(-5);
-    const redCount = last5.filter((c) => c.close <= c.open).length;
-    if (redCount >= 3) votes++;
+    // 3. Ventana óptima de enfriamiento (entre 2 velas y 1.15x la media del índice)
+    if (candlesSinceLastSpike >= 2 && candlesSinceLastSpike <= Math.ceil(benchmark * 1.15)) {
+      votes++;
+    }
 
-    // 4. Momentum
-    if (macdVal.histogram < 0 || lastEma9 < lastEma21) votes++;
+    // 4. RSI en zona de descuento saludable para recarga alcista (26-52), penalizando sangrado bajista (<22)
+    if (rsiVal >= 26 && rsiVal <= 52 && posInBB >= 0.12 && posInBB <= 0.60) {
+      votes++;
+    }
 
-    stars = Math.min(4, Math.max(1, Math.round((votes / 5) * 4)));
+    stars = Math.min(4, Math.max(1, Math.round((votes / 6) * 4)));
   } else {
     direction = lastEma9 > lastEma21 ? 'COMPRA' : 'VENTA';
     stars = 2;
@@ -507,13 +597,6 @@ function computeSignalFromCandles(
 
   // ── SL y TP para entradas con proyección (Largas) ─────────────────────────
   const projLevels = calcLongProjectionLevels(symbol, direction, entry, atrVal, undefined, undefined, sorted);
-  const typicalM1 = calcTypicalM1Size(sorted, atrVal);
-
-  const { candlesSinceLastSpike } = calcSpikeStats(
-    sorted,
-    symClass === 'crash' ? 'CRASH' : symClass === 'boom' ? 'BOOM' : 'OTHER',
-    typicalM1,
-  );
 
   return {
     symbol,
@@ -535,6 +618,10 @@ function computeSignalFromCandles(
     structureOk: true,
     candlesSinceLastSpike,
     avgReactionCandles: benchmark,
+    recentSpikesCount,
+    pullbackPct,
+    inOrderBlockZone,
+    obInvalidated,
     viable: true,
     viabilityReason: 'Evaluando con M15',
     insufficientData: false,
@@ -545,7 +632,8 @@ function computeSignalFromCandles(
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 const HISTORY_DAYS = 90;
-const RECENT_REACTION_DAYS = 30;
+// Ventana estricta de reacción reciente: últimas 8 horas (en vez de 30 días)
+const RECENT_REACTION_HOURS = 8;
 const MTF_GRANULARITIES = [900, 1800, 3600, 14400];
 const MTF_LABELS: Record<number, string> = { 900: '15m', 1800: '30m', 3600: '1h', 14400: '4h' };
 
@@ -583,36 +671,27 @@ function analyzeTimeframeHistory(
   const fast = fastSeries[fastSeries.length - 1];
   const prevFast = fastSeries.length >= 2 ? fastSeries[fastSeries.length - 2] : fast;
   const slow = slowSeries[slowSeries.length - 1];
+  const prevSlow = slowSeries.length >= 3 ? slowSeries[slowSeries.length - 3] : slow;
   const lastPrice = closes[closes.length - 1];
 
   let direction: SignalDirection = 'NEUTRAL';
   if (symbolClass === 'boom') {
-    // Para BOOM:
-    // Si el precio cae por debajo de la EMA rápida y la EMA rápida apunta hacia abajo -> fase bajista (retroceso)
-    if (lastPrice < fast && fast < prevFast) {
+    // Para BOOM (COMPRA): exigir estructura alcista real (EMA rápida >= EMA lenta, pendiente >= 0 y precio sostenido)
+    if (lastPrice < slow || (lastPrice < fast && fast < prevFast) || slow < prevSlow) {
       direction = 'VENTA';
-    } else if (lastPrice < slow && fast <= slow) {
-      direction = 'VENTA';
-    } else if (fast > slow && lastPrice >= fast) {
-      direction = 'COMPRA';
-    } else if (fast > slow && lastPrice >= slow) {
+    } else if (fast >= slow && lastPrice >= slow) {
       direction = 'COMPRA';
     } else {
-      direction = fast > slow ? 'COMPRA' : 'VENTA';
+      direction = 'VENTA';
     }
   } else if (symbolClass === 'crash') {
-    // Para CRASH:
-    // Si el precio sube por encima de la EMA rápida y la EMA rápida apunta hacia arriba -> fase alcista (retroceso/acumulación)
-    if (lastPrice > fast && fast > prevFast) {
+    // Para CRASH (VENTA): exigir estructura bajista real (EMA rápida <= EMA lenta, pendiente <= 0 y precio bajo EMA lenta)
+    if (lastPrice > slow || (lastPrice > fast && fast > prevFast) || slow > prevSlow) {
       direction = 'COMPRA';
-    } else if (lastPrice > slow && fast >= slow) {
-      direction = 'COMPRA';
-    } else if (fast < slow && lastPrice <= fast) {
-      direction = 'VENTA';
-    } else if (fast < slow && lastPrice <= slow) {
+    } else if (fast <= slow && lastPrice <= slow) {
       direction = 'VENTA';
     } else {
-      direction = fast < slow ? 'VENTA' : 'COMPRA';
+      direction = 'COMPRA';
     }
   } else {
     direction = fast > slow ? 'COMPRA' : fast < slow ? 'VENTA' : 'NEUTRAL';
@@ -623,7 +702,8 @@ function analyzeTimeframeHistory(
     .filter((range) => range > 0)
     .sort((a, b) => a - b);
   const typicalRange = ranges[Math.floor(ranges.length * 0.6)] || 0;
-  const reactionThreshold = typicalRange * 1.35;
+  // Umbral más exigente (1.55x el rango típico) para contar solo reacciones institucionales reales
+  const reactionThreshold = typicalRange * 1.55;
 
   let reactionCount = 0;
   let recentReactionEpoch: number | null = null;
@@ -637,10 +717,12 @@ function analyzeTimeframeHistory(
     }
   }
 
+  // Posición del precio en el rango estructural reciente (últimas 48 velas del marco temporal)
+  const recentWindow = candles.slice(-48);
   const firstEpoch = Number(candles[0].epoch);
   const lastEpoch = Number(candles[candles.length - 1].epoch);
-  const minPrice = Math.min(...candles.map((c) => Number(c.low)));
-  const maxPrice = Math.max(...candles.map((c) => Number(c.high)));
+  const minPrice = Math.min(...recentWindow.map((c) => Number(c.low)));
+  const maxPrice = Math.max(...recentWindow.map((c) => Number(c.high)));
   const priceRange = maxPrice - minPrice;
   const pricePositionPct = priceRange > 0
     ? ((closes[closes.length - 1] - minPrice) / priceRange) * 100
@@ -778,26 +860,25 @@ export class SignalsService implements OnModuleInit {
       if (context.direction === base.direction) matchCount++;
     }
 
-    const recentReactionHours = RECENT_REACTION_DAYS * 24;
-    const historicalReactionFrames = Object.values(historyContext).filter(
-      (context) => context.recentReactionAgeHours !== null &&
-        context.recentReactionAgeHours <= recentReactionHours,
-    ).length;
+    // Ventana estricta de reacción reciente: 8h para 15m/30m/1h y 16h para 4h
+    const historicalReactionFrames = Object.entries(historyContext).filter(([tf, context]) => {
+      if (context.recentReactionAgeHours === null) return false;
+      const maxHours = tf === '4h' ? RECENT_REACTION_HOURS * 2 : RECENT_REACTION_HOURS;
+      return context.recentReactionAgeHours <= maxHours;
+    }).length;
 
     let alignment: MtfAlignment;
     let stars = base.stars;
 
     if (matchCount === 4) {
       alignment = 'ALINEADO';
-      stars = Math.min(4, stars + 1);
     } else if (matchCount >= 2) {
       alignment = 'PARCIAL';
     } else {
       alignment = 'SIN ALINEACIÓN (MEZCLADO)';
-      stars = Math.max(1, stars - 1);
     }
 
-    // ── Tendencia Macro 4H (EMA 21) ─────────────────────────────────────────
+    // ── Tendencia Macro 4H (EMA 21 + Pendiente) ─────────────────────────────
     let macroTrendH4: 'ALCISTA' | 'BAJISTA' | 'NEUTRAL' = 'NEUTRAL';
     let macroTrendH4Ok = true;
 
@@ -807,14 +888,15 @@ export class SignalsService implements OnModuleInit {
       const periodH4 = Math.min(21, Math.max(4, Math.floor(closesH4.length * 0.8)));
       const emaH4Series = ema(closesH4, periodH4);
       const emaH4 = emaH4Series[emaH4Series.length - 1];
+      const emaH4Prev = emaH4Series.length >= 3 ? emaH4Series[emaH4Series.length - 3] : emaH4;
       const lastH4Close = closesH4[closesH4.length - 1];
       const refPriceH4 = base.entry > 0 ? base.entry : lastH4Close;
 
       if (base.symbolClass === 'crash') {
-        macroTrendH4 = refPriceH4 < emaH4 ? 'BAJISTA' : 'ALCISTA';
+        macroTrendH4 = refPriceH4 < emaH4 && emaH4 <= emaH4Prev * 1.0002 ? 'BAJISTA' : 'ALCISTA';
         macroTrendH4Ok = macroTrendH4 === 'BAJISTA';
       } else if (base.symbolClass === 'boom') {
-        macroTrendH4 = refPriceH4 > emaH4 ? 'ALCISTA' : 'BAJISTA';
+        macroTrendH4 = refPriceH4 > emaH4 && emaH4 >= emaH4Prev * 0.9998 ? 'ALCISTA' : 'BAJISTA';
         macroTrendH4Ok = macroTrendH4 === 'ALCISTA';
       } else {
         macroTrendH4 = refPriceH4 > emaH4 ? 'ALCISTA' : 'BAJISTA';
@@ -822,87 +904,65 @@ export class SignalsService implements OnModuleInit {
       }
     }
 
-    // ── Tendencia Intermedia M15 (EMA 50) y Estructura ──────────────────────
+    // ── Tendencia Intermedia M15 (EMA 50 + EMA 21 + Pendiente) y Estructura Real ──
     let macroTrend: 'ALCISTA' | 'BAJISTA' | 'NEUTRAL' = 'NEUTRAL';
     let macroTrendOk = true;
     let structureOk = true;
+    let structureReason = '';
 
-    if (mtf15Raw.length >= 8) {
+    if (mtf15Raw.length >= 12) {
       const sorted15 = [...mtf15Raw].sort((a, b) => a.epoch - b.epoch);
       const closes15 = sorted15.map((c) => c.close);
-      const period15 = Math.min(50, Math.max(5, Math.floor(closes15.length * 0.8)));
+      const period15 = Math.min(50, Math.max(10, Math.floor(closes15.length * 0.8)));
       const ema50Series = ema(closes15, period15);
+      const ema21Series = ema(closes15, Math.min(21, Math.max(5, Math.floor(closes15.length * 0.5))));
       const ema50 = ema50Series[ema50Series.length - 1];
+      const ema50Prev = ema50Series.length >= 3 ? ema50Series[ema50Series.length - 3] : ema50;
+      const ema21_15 = ema21Series[ema21Series.length - 1];
       const last15Close = closes15[closes15.length - 1];
       const refPrice15 = base.entry > 0 ? base.entry : last15Close;
 
       if (base.symbolClass === 'crash') {
-        macroTrend = refPrice15 < ema50 ? 'BAJISTA' : 'ALCISTA';
+        macroTrend = refPrice15 < ema50 && ema21_15 <= ema50 && ema50 <= ema50Prev * 1.0001 ? 'BAJISTA' : 'ALCISTA';
         macroTrendOk = macroTrend === 'BAJISTA';
       } else if (base.symbolClass === 'boom') {
-        macroTrend = refPrice15 > ema50 ? 'ALCISTA' : 'BAJISTA';
+        macroTrend = refPrice15 > ema50 && ema21_15 >= ema50 && ema50 >= ema50Prev * 0.9999 ? 'ALCISTA' : 'BAJISTA';
         macroTrendOk = macroTrend === 'ALCISTA';
       } else {
         macroTrend = refPrice15 > ema50 ? 'ALCISTA' : 'BAJISTA';
         macroTrendOk = base.direction === 'COMPRA' ? macroTrend === 'ALCISTA' : macroTrend === 'BAJISTA';
       }
 
-      // Estructura de máximos/mínimos en M15 (últimas 10 velas)
-      const recent15Highs = sorted15.slice(-10).map((c) => c.high);
-      const recent15Lows  = sorted15.slice(-10).map((c) => c.low);
-      const maxHigh15 = Math.max(...recent15Highs);
-      const minLow15  = Math.min(...recent15Lows);
+      // Estructura Real de Mercado en M15: comparar bloque previo vs bloque reciente (Lower Highs en Crash / Higher Lows en Boom)
+      const prevBlock15 = sorted15.slice(-14, -5);
+      const recentBlock15 = sorted15.slice(-5);
+      const prevMaxHigh15 = Math.max(...prevBlock15.map((c) => c.high));
+      const prevMinLow15  = Math.min(...prevBlock15.map((c) => c.low));
+      const recentMaxHigh15 = Math.max(...recentBlock15.map((c) => c.high));
+      const recentMinLow15  = Math.min(...recentBlock15.map((c) => c.low));
 
       if (base.symbolClass === 'crash') {
-        // En Crash: estructura válida si el precio no ha roto el techo previo
-        structureOk = base.entry <= maxHigh15;
+        // En Crash: exigir Máximos Decrecientes (Lower Highs) y que el Order Block 5M no esté invalidado
+        if (base.obInvalidated) {
+          structureOk = false;
+          structureReason = 'Order Block 5M invalidado (precio superó origen del último spike)';
+        } else if (recentMaxHigh15 > prevMaxHigh15 || base.entry >= recentMaxHigh15) {
+          structureOk = false;
+          structureReason = 'Estructura M15 rompió máximo previo (sin Lower Highs)';
+        }
       } else if (base.symbolClass === 'boom') {
-        // En Boom: estructura válida si el precio no ha roto el piso previo
-        structureOk = base.entry >= minLow15;
+        // En Boom: exigir Mínimos Crecientes (Higher Lows) y que el Order Block 5M no esté invalidado
+        if (base.obInvalidated) {
+          structureOk = false;
+          structureReason = 'Order Block 5M invalidado (precio perforó origen del último spike)';
+        } else if (recentMinLow15 < prevMinLow15 || base.entry <= recentMinLow15) {
+          structureOk = false;
+          structureReason = 'Estructura M15 perforó mínimo previo (sin Higher Lows)';
+        }
       }
     }
 
-    // ── Viabilidad Confluente (4H, 1H, 30M, 15M) ───────────────────────────
-    let viable = true;
-    let viabilityReason = 'Confluencia 4H/1H/30M/15M favorable';
-
-    if (base.insufficientData) {
-      viable = false;
-      viabilityReason = 'Datos insuficientes';
-    } else if (base.candlesSinceLastSpike < 2) {
-      // 2 velas de 5M = 10 minutos de enfriamiento post-spike
-      viable = false;
-      viabilityReason = `Enfriamiento post-spike (${base.candlesSinceLastSpike} velas 5M tras spike, mín 2)`;
-    } else if (!macroTrendH4Ok && mtfH4Raw.length >= 6) {
-      viable = false;
-      viabilityReason = `Contra tendencia 4H (${macroTrendH4})`;
-    } else if (!macroTrendOk && mtf15Raw.length >= 8) {
-      viable = false;
-      viabilityReason = `Contra tendencia M15 (${macroTrend}, precio ${macroTrend === 'ALCISTA' ? 'sobre' : 'bajo'} EMA 50)`;
-    } else if (matchCount < 3) {
-      viable = false;
-      viabilityReason = `Confluencia insuficiente: ${matchCount}/4 marcos acompañan la dirección`;
-    } else if (historicalReactionFrames < 2) {
-      viable = false;
-      viabilityReason = `Sin reacción histórica reciente suficiente (${historicalReactionFrames}/4 marcos en 30 días)`;
-    } else if (!structureOk) {
-      viable = false;
-      viabilityReason = 'Estructura M15 adversa (máximo/mínimo vulnerado)';
-    } else if (base.candlesSinceLastSpike > base.avgReactionCandles * 3) {
-      viable = false;
-      viabilityReason = `Sobre-extensión (${base.candlesSinceLastSpike} velas 5M sin spike, media ${base.avgReactionCandles})`;
-    } else {
-      viable = true;
-      const alignedText = matchCount === 4 ? 'Alineado 4H/1H/30M/15M' : `${matchCount}/4 marcos alineados`;
-      viabilityReason = `Viable: ${alignedText} · reacciones recientes ${historicalReactionFrames}/4`;
-    }
-
     // ── SL y TP para ENTRADAS CON PROYECCIÓN (LARGAS) usando H4, H1 y M15 ──
-    // Four stars are reserved for opportunities that pass every viability gate.
-    if (!viable) {
-      stars = Math.min(stars, 3);
-    }
-
     const projection = calcLongProjectionLevels(
       symbol,
       base.direction,
@@ -913,6 +973,84 @@ export class SignalsService implements OnModuleInit {
       raw,
       mtfH4Raw,
     );
+
+    const maxReactionWindow = Math.max(6, Math.round(base.avgReactionCandles * 1.25));
+    const coreTimeframesAligned =
+      alignmentDetail['4h'] === base.direction &&
+      alignmentDetail['1h'] === base.direction &&
+      alignmentDetail['15m'] === base.direction;
+
+    const pos1h = historyContext['1h']?.pricePositionPct ?? 50;
+    const extremeZoneConflict =
+      (base.symbolClass === 'crash' && pos1h < 18) ||
+      (base.symbolClass === 'boom' && pos1h > 82);
+
+    // ── Viabilidad Confluente Estricta ("Modo Sniper") ──────────────────────
+    let viable = true;
+    let viabilityReason = 'Confluencia 4H/1H/30M/15M favorable';
+
+    if (base.insufficientData) {
+      viable = false;
+      viabilityReason = 'Datos insuficientes';
+    } else if ((base.recentSpikesCount ?? 0) < 2) {
+      viable = false;
+      viabilityReason = `Mercado frío (${base.recentSpikesCount ?? 0} spikes en últimas 3h, mín 2)`;
+    } else if (base.candlesSinceLastSpike < 2) {
+      viable = false;
+      viabilityReason = `Enfriamiento post-spike (${base.candlesSinceLastSpike}v 5M tras spike, mín 2 para pullback)`;
+    } else if (base.candlesSinceLastSpike > maxReactionWindow) {
+      viable = false;
+      viabilityReason = `Sin reacción activa (${base.candlesSinceLastSpike}v 5M sin spike, máx ${maxReactionWindow}v)`;
+    } else if (!base.inOrderBlockZone) {
+      viable = false;
+      viabilityReason = `Fuera de zona Order Block/Pullback (${base.pullbackPct ?? 0}%, requiere 30%–85% del último spike)`;
+    } else if (!macroTrendH4Ok && mtfH4Raw.length >= 6) {
+      viable = false;
+      viabilityReason = `Contra tendencia 4H (${macroTrendH4} o pendiente adversa)`;
+    } else if (!macroTrendOk && mtf15Raw.length >= 12) {
+      viable = false;
+      viabilityReason = `Contra tendencia M15 (${macroTrend}, requiere EMA21 y precio alineados con EMA50)`;
+    } else if (!coreTimeframesAligned || matchCount < 3) {
+      viable = false;
+      viabilityReason = `Falta alineación obligatoria 4H+1H+15M (${matchCount}/4 marcos alineados)`;
+    } else if (historicalReactionFrames < 3) {
+      viable = false;
+      viabilityReason = `Poca reacción institucional hoy (${historicalReactionFrames}/4 marcos activos en últimas 8h)`;
+    } else if (!structureOk) {
+      viable = false;
+      viabilityReason = structureReason || 'Estructura M15 adversa (máximo/mínimo vulnerado)';
+    } else if (projection.recorrido > 45) {
+      viable = false;
+      viabilityReason = `Movimiento tardío: recorrido ya en ${projection.recorrido}% (máx 45% para entrar con margen)`;
+    } else if (extremeZoneConflict) {
+      viable = false;
+      viabilityReason = base.symbolClass === 'crash'
+        ? `Precio muy abajo en piso de 1H (${pos1h}%) — riesgo de rebote alcista`
+        : `Precio muy arriba en techo de 1H (${pos1h}%) — riesgo de caída`;
+    } else if (projection.rb < 7.5) {
+      viable = false;
+      viabilityReason = `R/B insuficiente (${projection.rb}, mínimo exigido 7.5)`;
+    } else {
+      viable = true;
+      const alignedText = matchCount === 4 ? 'Alineado 4H/1H/30M/15M' : `${matchCount}/4 marcos (4H+1H+15M OK)`;
+      viabilityReason = `Sniper Viable: ${alignedText} · OB ${base.pullbackPct}% · ${base.recentSpikesCount} spikes/3h`;
+    }
+
+    // ── Asignación Estricta de Estrellas (4★ reservado a entradas Sniper perfectas) ──
+    if (!viable) {
+      // Ninguna señal NO viable puede tener 3★ ni 4★ (máximo 2★)
+      stars = Math.min(stars, 2);
+    } else {
+      const isSniperFourStars =
+        matchCount === 4 &&
+        base.inOrderBlockZone &&
+        (base.recentSpikesCount ?? 0) >= 3 &&
+        projection.recorrido <= 38 &&
+        projection.rb >= 8.5 &&
+        historicalReactionFrames >= 3;
+
+      stars = isSniperFourStars ? 4 : 3;
+    }
 
     return {
       ...base,
