@@ -164,7 +164,7 @@
       >
         <span class="index-nav-title q-mr-xs">{{ sym.name }}</span>
         <q-badge
-          :color="getStatusBadgeColor(summaryMap[sym.symbol]?.status)"
+          :color="getStatusBadgeColor(summaryMap[sym.symbol])"
           :label="summaryMap[sym.symbol]?.statusLabel || 'Consultando...'"
           class="q-ml-xs text-weight-bold"
         />
@@ -767,7 +767,7 @@
                   {{ isBoom ? '2. Sobreventa RSI 14 (M5)' : '2. Sobrecompra RSI 14 (M5)' }}
                 </div>
                 <div class="text-caption text-slate-500">
-                  RSI actual: {{ evaluation.filters.rsi_M5 }} ({{ isBoom ? 'Máximo: 35.0' : 'Mínimo: 65.0' }})
+                  RSI actual: {{ evaluation.filters.rsi_M5 }} ({{ isBoom ? 'Zona ideal: 20.0 – 40.0' : 'Zona ideal: 60.0 – 80.0' }})
                 </div>
               </div>
               <q-badge
@@ -1003,10 +1003,16 @@ function formatNum(val) {
   return Number(val).toFixed(2);
 }
 
-function getStatusBadgeColor(status) {
+function getStatusBadgeColor(itemOrStatus) {
+  if (!itemOrStatus) return 'grey-6';
+  const status = typeof itemOrStatus === 'string' ? itemOrStatus : itemOrStatus.status;
+  const isConfirmed = typeof itemOrStatus === 'object' && Boolean(itemOrStatus.canBuy || itemOrStatus.canSell);
+
+  if (isConfirmed) return 'emerald-7';
+
   switch (status) {
-    case 'EN_ZONA_50': return 'emerald-7';
-    case 'EN_BASE_CAJA': return 'amber-8';
+    case 'EN_ZONA_50': return 'amber-8';
+    case 'EN_BASE_CAJA': return 'blue-grey-6';
     case 'EN_RETESTEO': return 'amber-9';
     case 'EN_MARGEN_SL': return 'orange-8';
     case 'SL_SUPERADO': return 'red-7';

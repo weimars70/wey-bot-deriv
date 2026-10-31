@@ -220,17 +220,17 @@ export class CrashIaStrategyService {
       : h1Candles[0] || null;
     const h1LinePrice = completedH1 ? Number(completedH1.close) : currentPrice;
 
-    // 3. Patrón V / Lambda en M5
+    // 3. Altura de Vela M5 (mediana de velas M5 de movimiento continuo)
+    const m5CandleHeight = this.calculateM5CandleHeight(m5Candles, sym, isBoom);
+
+    // 4. Patrón V / Lambda Institucional en M5 (Reciente, con spike real, pegado a H1 y NO roto/mitigado)
     // En Crash: V normal (suelo en spike rojo previo sobre línea H1).
     // En Boom: Lambda invertida (techo en spike verde previo bajo línea H1).
     const vCandidate = isBoom
-      ? this.findVPatternM5Boom(m5Candles, h1LinePrice)
-      : this.findVPatternM5Crash(m5Candles, h1LinePrice);
+      ? this.findVPatternM5Boom(m5Candles, h1LinePrice, m5CandleHeight, sym)
+      : this.findVPatternM5Crash(m5Candles, h1LinePrice, m5CandleHeight, sym);
 
     const vLinePrice = vCandidate ? vCandidate.vLinePrice : h1LinePrice;
-
-    // 4. Altura de Vela M5 (mediana de velas M5 de movimiento continuo)
-    const m5CandleHeight = this.calculateM5CandleHeight(m5Candles, sym, isBoom);
 
     // 5. Caja en Tiempo Real (3 velas M5)
     let boxFloor: number;
@@ -261,17 +261,33 @@ export class CrashIaStrategyService {
     // 6. Nivel Estructural H1 (Fractal mayor: resistencia en Crash / soporte en Boom)
     const h1StructuralPrice = this.findH1StructuralLevel(h1Candles, isBoom);
 
-    // 7. Filtro 1: Tendencia Macro (EMA 50 en M15)
-    const ema50_M15 = this.calculateEMA(m15Candles.map((c) => Number(c.close)), 50);
-    const trendM15: 'BAJISTA' | 'ALCISTA' = currentPrice <= ema50_M15 ? 'BAJISTA' : 'ALCISTA';
-    // En Crash: precio <= EMA50 (Bajista); En Boom: precio >= EMA50 (Alcista)
-    const trendOk = isBoom ? currentPrice >= ema50_M15 : currentPrice <= ema50_M15;
+    // 7. Filtro 1: Tendencia Macro Estricta (EMA 50 + EMA 21 + Pendiente en M15)
+    const m15Closes = m15Candles.map((c) => Number(c.close));
+    const ema50_M15 = this.calculateEMA(m15Closes, 50);
+    const ema21_M15 = this.calculateEMA(m15Closes, 21);
+    const ema50Prev_M15 = m15Closes.length > 4
+      ? this.calculateEMA(m15Closes.slice(0, -3), 50)
+      : ema50_M15;
 
-    // 8. Filtro 2: RSI 14 en M5
-    // En Crash: sobrecompra / zona alta (RSI >= 65.0)
-    // En Boom: sobreventa / zona de descuento (RSI <= 35.0)
+    const trendM15: 'BAJISTA' | 'ALCISTA' =
+      (!isBoom && currentPrice <= ema50_M15 && ema21_M15 <= ema50_M15 * 1.0003 && ema50_M15 <= ema50Prev_M15 * 1.0002)
+        ? 'BAJISTA'
+        : (isBoom && currentPrice >= ema50_M15 && ema21_M15 >= ema50_M15 * 0.9997 && ema50_M15 >= ema50Prev_M15 * 0.9998)
+        ? 'ALCISTA'
+        : currentPrice <= ema50_M15
+        ? 'BAJISTA'
+        : 'ALCISTA';
+
+    // En Crash: precio <= EMA50, EMA21 <= EMA50 y pendiente bajista; En Boom: precio >= EMA50, EMA21 >= EMA50 y pendiente alcista
+    const trendOk = isBoom
+      ? currentPrice >= ema50_M15 && ema21_M15 >= ema50_M15 * 0.9997 && ema50_M15 >= ema50Prev_M15 * 0.9998
+      : currentPrice <= ema50_M15 && ema21_M15 <= ema50_M15 * 1.0003 && ema50_M15 <= ema50Prev_M15 * 1.0002;
+
+    // 8. Filtro 2: RSI 14 en M5 (acotado para evitar tendencias descontroladas sin spikes)
+    // En Crash: zona de recarga (60.0 <= RSI <= 78.0)
+    // En Boom: zona de descuento (22.0 <= RSI <= 40.0)
     const rsi_M5 = this.calculateRSI(m5Candles.map((c) => Number(c.close)), 14);
-    const rsiOk = isBoom ? rsi_M5 <= 35.0 : rsi_M5 >= 65.0;
+    const rsiOk = isBoom ? (rsi_M5 <= 40.0 && rsi_M5 >= 20.0) : (rsi_M5 >= 60.0 && rsi_M5 <= 80.0);
 
     // 9. Filtro 3: Velas M1 de enfriamiento tras spike
     // En Crash: mínimo 3 velas verdes consecutivas hacia arriba tras el spike
@@ -291,7 +307,11 @@ export class CrashIaStrategyService {
     let statusLabel = 'Fuera de zona';
     let statusSeverity: CrashIaEvaluation['statusSeverity'] = 'info';
 
-    if (!isBoom) {
+    if (!vCandidate) {
+      status = isBoom ? 'SOBRE_ZONA' : 'BAJO_ZONA';
+      statusLabel = isBoom ? 'Sin patrón Λ reciente bajo H1' : 'Sin patrón V reciente sobre H1';
+      statusSeverity = 'info';
+    } else if (!isBoom) {
       // ── Evaluación de estado para CRASH (Venta)
       if (currentPrice > stopLossPrice) {
         status = 'SL_SUPERADO';
@@ -303,12 +323,12 @@ export class CrashIaStrategyService {
         statusSeverity = 'warning';
       } else if (currentPrice >= entryLevel50) {
         status = 'EN_ZONA_50';
-        statusLabel = '🎯 En Zona de Entrada (50% Superior / SELL)';
-        statusSeverity = 'success';
+        statusLabel = '⏳ En Caja 50% (Validando OB y filtros)';
+        statusSeverity = 'warning';
       } else if (currentPrice >= boxFloor) {
         status = 'EN_BASE_CAJA';
         statusLabel = 'En base de caja (esperando subida al 50%)';
-        statusSeverity = 'warning';
+        statusSeverity = 'info';
       } else {
         status = 'BAJO_ZONA';
         statusLabel = 'Por debajo de la caja V';
@@ -326,12 +346,12 @@ export class CrashIaStrategyService {
         statusSeverity = 'warning';
       } else if (currentPrice <= entryLevel50) {
         status = 'EN_ZONA_50';
-        statusLabel = '🎯 En Zona de Entrada (50% Inferior / BUY)';
-        statusSeverity = 'success';
+        statusLabel = '⏳ En Caja 50% (Validando OB y filtros)';
+        statusSeverity = 'warning';
       } else if (currentPrice <= boxCeiling) {
         status = 'EN_BASE_CAJA';
         statusLabel = 'En techo de caja (esperando retroceso al 50%)';
-        statusSeverity = 'warning';
+        statusSeverity = 'info';
       } else {
         status = 'SOBRE_ZONA';
         statusLabel = 'Por encima de la caja (esperando retroceso)';
@@ -339,7 +359,7 @@ export class CrashIaStrategyService {
       }
     }
 
-    // 12. Detección y ubicación de Puntos Order Block (OB) en temporalidad M5
+    // 12. Detección y ubicación de Puntos Order Block (OB) en temporalidad M5 (Solo FRESCOS, primer toque)
     const { active: activeOrderBlock, list: recentOrderBlocks } = this.findOrderBlocks(
       m5Candles,
       currentPrice,
@@ -348,7 +368,6 @@ export class CrashIaStrategyService {
     );
 
     // 13. Validación Rigurosa de Viabilidad en Temporalidad M5
-    // "viéndolo en temporalidad de m5 puede reaccionar pero más bajo, la entrada debió ser casi por donde quedó el SL"
     const m5Viability = this.checkM5ReactionViability(
       m5Candles,
       currentPrice,
@@ -358,11 +377,11 @@ export class CrashIaStrategyService {
       boxFloor,
       boxCeiling,
       entryLevel50,
+      m5CandleHeight,
+      Boolean(vCandidate),
     );
 
     // 13.1 Detección de Zona de Retesteo / Consolidación Lateral en M5
-    // En Crash 500 y otros índices, cuando el precio oscila en una banda horizontal estrecha,
-    // está en retesteo acumulando liquidez. No se debe entrar en el medio de la consolidación.
     const retestInfo = this.checkRetestConsolidationZone(
       m5Candles,
       currentPrice,
@@ -381,24 +400,36 @@ export class CrashIaStrategyService {
       }
       m5Viability.isViable = false;
       m5Viability.reason = retestInfo.reason;
-    } else if (retestInfo.isInRetest && retestInfo.isReadyForEntry) {
+    } else if (retestInfo.isInRetest && retestInfo.isReadyForEntry && m5Viability.isViable) {
       m5Viability.reason = retestInfo.reason;
     }
 
     const canSell =
       !isBoom &&
+      Boolean(vCandidate) &&
       status === 'EN_ZONA_50' &&
       trendOk &&
       rsiOk &&
       greenOk &&
+      velaAmigaOk &&
       m5Viability.isViable;
     const canBuy =
       isBoom &&
+      Boolean(vCandidate) &&
       status === 'EN_ZONA_50' &&
       trendOk &&
       rsiOk &&
       greenOk &&
+      velaAmigaOk &&
       m5Viability.isViable;
+
+    // Solo mostrar badge VERDE (success) cuando TODOS los filtros institucionales y el OB M5 están confirmados
+    if (canSell || canBuy) {
+      statusLabel = isBoom
+        ? '🎯 ZONA SNIPER CONFIRMADA (BUY)'
+        : '🎯 ZONA SNIPER CONFIRMADA (SELL)';
+      statusSeverity = 'success';
+    }
 
     // 14. Velas a retornar para el gráfico según temporalidad solicitada
     const timeframeSeconds = (timeframeMinutes || 5) * 60;
@@ -917,6 +948,8 @@ export class CrashIaStrategyService {
     boxFloor: number,
     boxCeiling: number,
     entryLevel50: number,
+    m5CandleHeight: number = 2.5,
+    hasValidVPattern: boolean = true,
   ): {
     isViable: boolean;
     reason: string;
@@ -924,149 +957,167 @@ export class CrashIaStrategyService {
     distToReaction: number;
     reactionType: 'ORDER_BLOCK_M5' | 'SOPORTE_ESTRUCTURAL_M5' | 'RESISTENCIA_ESTRUCTURAL_M5' | 'RETROCESO_50_M5';
   } {
-    // 1. Prioridad: Order Block Institucional en M5
+    if (!hasValidVPattern) {
+      return {
+        isViable: false,
+        reason: `En M5 no hay patrón ${isBoom ? 'Λ' : 'V'} institucional fresco cerca de la línea H1 (últimas 3h)`,
+        targetReactionPrice: parseFloat(entryLevel50.toFixed(3)),
+        distToReaction: parseFloat(Math.abs(currentPrice - entryLevel50).toFixed(3)),
+        reactionType: 'RETROCESO_50_M5',
+      };
+    }
+
+    // 1. Prioridad Principal: Order Block Institucional FRESCO (Primer toque no mitigado) en M5
     if (activeOB && (activeOB.status === 'EN_ZONA' || activeOB.status === 'FRESCO')) {
       const targetReactionPrice = activeOB.mid50;
-      const tolerance = Math.max((activeOB.high - activeOB.low) * 0.4, 2.0);
+      const obSpan = Math.max(activeOB.high - activeOB.low, 0.5);
+      const tolerance = Math.min(obSpan * 0.25, m5CandleHeight * 0.35);
       const distToReaction = parseFloat(
         ((isBoom ? currentPrice - targetReactionPrice : targetReactionPrice - currentPrice)).toFixed(3),
       );
-      const priceInZone = currentPrice >= activeOB.low - tolerance
-        && currentPrice <= activeOB.high + tolerance;
-      const reversalConfirmed = this.hasClosedM5Reversal(
+
+      // En Crash: vender desde el 50% (mid50) hasta el techo del OB sin superarlo.
+      // En Boom: comprar desde el 50% (mid50) hasta el piso del OB sin perforarlo.
+      const inOptimalEntryBand = isBoom
+        ? currentPrice <= activeOB.mid50 + tolerance && currentPrice >= activeOB.low
+        : currentPrice >= activeOB.mid50 - tolerance && currentPrice <= activeOB.high;
+
+      // Además, el OB debe confluir con la mitad superior (Crash) / inferior (Boom) de la Caja V/H1
+      const alignedWithVBox = isBoom
+        ? currentPrice <= entryLevel50 + m5CandleHeight * 0.25 && currentPrice >= boxFloor - m5CandleHeight * 0.5
+        : currentPrice >= entryLevel50 - m5CandleHeight * 0.25 && currentPrice <= boxCeiling + m5CandleHeight * 0.5;
+
+      const rejectionOrDeceleration = this.hasOrderBlockRejectionOrDeceleration(
         m5Candles,
         isBoom,
-        activeOB.low - tolerance,
-        activeOB.high + tolerance,
+        activeOB.low,
+        activeOB.high,
       );
 
+      const isViable = inOptimalEntryBand && alignedWithVBox && rejectionOrDeceleration;
+
+      let reason = '';
+      if (!inOptimalEntryBand) {
+        reason = `Esperar llegada al 50% del Order Block Fresco (${activeOB.mid50}; rango ${activeOB.low} - ${activeOB.high})`;
+      } else if (!alignedWithVBox) {
+        reason = `Order Block M5 (${activeOB.mid50}) fuera de confluencia con el 50% de la Caja ${isBoom ? 'Λ' : 'V'} (${entryLevel50.toFixed(2)})`;
+      } else if (!rejectionOrDeceleration) {
+        reason = `En zona OB (${activeOB.mid50}), esperando mecha de rechazo o desaceleración M5 antes de entrar`;
+      } else {
+        reason = `Confluencia Sniper M5: Primer toque en 50% de Order Block Fresco (${activeOB.mid50}) + Caja ${isBoom ? 'Λ' : 'V'}`;
+      }
+
       return {
-        isViable: priceInZone && reversalConfirmed,
-        reason: !priceInZone
-          ? `En M5 el precio está fuera del Order Block (${activeOB.low} - ${activeOB.high})`
-          : reversalConfirmed
-          ? `En M5 el precio rechazó al alza el Order Block (${activeOB.low} - ${activeOB.high})`
-          : `En M5 esperar cierre de rechazo ${isBoom ? 'alcista' : 'bajista'} en el Order Block (${activeOB.low} - ${activeOB.high})`,
+        isViable,
+        reason,
         targetReactionPrice,
         distToReaction,
         reactionType: 'ORDER_BLOCK_M5',
       };
     }
 
-    // 2. Si no hay OB activo, buscar el soporte/resistencia estructural de los últimos spikes M5
-    if (m5Candles && m5Candles.length >= 10) {
+    // 2. Segunda opción: Cluster Real de Doble/Triple Rechazo de Spikes en el MISMO nivel (no promedio aritmético)
+    if (m5Candles && m5Candles.length >= 12) {
+      const clusterTolerance = Math.max(m5CandleHeight * 0.55, 1.2);
+      const minSpikePts = Math.max(m5CandleHeight * 1.6, 4.0);
+
       if (isBoom) {
-        const spikeBases: number[] = [];
-        for (let i = m5Candles.length - 2; i >= Math.max(0, m5Candles.length - 30); i--) {
+        const spikeOrigins: number[] = [];
+        for (let i = m5Candles.length - 2; i >= Math.max(0, m5Candles.length - 36); i--) {
           const c = m5Candles[i];
           const next = m5Candles[i + 1];
-          if (Number(next.close) - Number(next.open) >= 4.0) {
-            spikeBases.push(Number(c.low));
+          if (Number(next.close) - Number(next.open) >= minSpikePts) {
+            spikeOrigins.push(Math.min(Number(c.low), Number(next.low)));
           }
         }
 
-        if (spikeBases.length > 0) {
-          const targetReactionPrice = parseFloat(
-            (spikeBases.reduce((a, b) => a + b, 0) / spikeBases.length).toFixed(3),
-          );
-          const distToReaction = parseFloat((currentPrice - targetReactionPrice).toFixed(3));
-          const nearSupport = Math.abs(distToReaction) <= 3.5;
-          const reversalConfirmed = this.hasClosedM5Reversal(
+        // Buscar si al menos 2 spikes nacieron exactamente en el mismo soporte (cluster real) y no fue roto
+        let bestClusterPrice: number | null = null;
+        for (const basePrice of spikeOrigins) {
+          const touches = spikeOrigins.filter((p) => Math.abs(p - basePrice) <= clusterTolerance);
+          if (touches.length >= 2 && basePrice <= entryLevel50 + clusterTolerance && basePrice >= boxFloor - clusterTolerance) {
+            bestClusterPrice = parseFloat((touches.reduce((a, b) => a + b, 0) / touches.length).toFixed(3));
+            break;
+          }
+        }
+
+        if (bestClusterPrice !== null) {
+          const distToReaction = parseFloat((currentPrice - bestClusterPrice).toFixed(3));
+          const nearSupport = Math.abs(distToReaction) <= clusterTolerance;
+          const rejectionOk = this.hasOrderBlockRejectionOrDeceleration(
             m5Candles,
             true,
-            targetReactionPrice - 3.5,
-            targetReactionPrice + 3.5,
+            bestClusterPrice - clusterTolerance,
+            bestClusterPrice + clusterTolerance,
           );
-          if (nearSupport && reversalConfirmed) {
-            return {
-              isViable: true,
-              reason: `En M5 el precio rechazó al alza el soporte estructural (${targetReactionPrice})`,
-              targetReactionPrice,
-              distToReaction,
-              reactionType: 'SOPORTE_ESTRUCTURAL_M5',
-            };
-          } else {
-            return {
-              isViable: false,
-              reason: nearSupport
-                ? `En M5 esperar cierre de rechazo alcista en soporte (${targetReactionPrice})`
-                : `En TF M5 el precio está lejos del soporte estructural (${targetReactionPrice}; distancia ${distToReaction} pts)`,
-              targetReactionPrice,
-              distToReaction,
-              reactionType: 'SOPORTE_ESTRUCTURAL_M5',
-            };
-          }
+          return {
+            isViable: nearSupport && rejectionOk,
+            reason: nearSupport && rejectionOk
+              ? `Doble/Triple soporte institucional de spikes confirmado en ${bestClusterPrice}`
+              : `Esperar toque y rechazo en cluster de soporte M5 (${bestClusterPrice}; dist ${distToReaction} pts)`,
+            targetReactionPrice: bestClusterPrice,
+            distToReaction,
+            reactionType: 'SOPORTE_ESTRUCTURAL_M5',
+          };
         }
       } else {
-        const spikeTops: number[] = [];
-        for (let i = m5Candles.length - 2; i >= Math.max(0, m5Candles.length - 30); i--) {
+        const spikeOrigins: number[] = [];
+        for (let i = m5Candles.length - 2; i >= Math.max(0, m5Candles.length - 36); i--) {
           const c = m5Candles[i];
           const next = m5Candles[i + 1];
-          if (Number(next.open) - Number(next.close) >= 4.0) {
-            spikeTops.push(Number(c.high));
+          if (Number(next.open) - Number(next.close) >= minSpikePts) {
+            spikeOrigins.push(Math.max(Number(c.high), Number(next.high)));
           }
         }
 
-        if (spikeTops.length > 0) {
-          const targetReactionPrice = parseFloat(
-            (spikeTops.reduce((a, b) => a + b, 0) / spikeTops.length).toFixed(3),
-          );
-          const distToReaction = parseFloat((targetReactionPrice - currentPrice).toFixed(3));
-          const nearResistance = Math.abs(distToReaction) <= 3.5;
-          const reversalConfirmed = this.hasClosedM5Reversal(
+        let bestClusterPrice: number | null = null;
+        for (const topPrice of spikeOrigins) {
+          const touches = spikeOrigins.filter((p) => Math.abs(p - topPrice) <= clusterTolerance);
+          if (touches.length >= 2 && topPrice >= entryLevel50 - clusterTolerance && topPrice <= boxCeiling + clusterTolerance) {
+            bestClusterPrice = parseFloat((touches.reduce((a, b) => a + b, 0) / touches.length).toFixed(3));
+            break;
+          }
+        }
+
+        if (bestClusterPrice !== null) {
+          const distToReaction = parseFloat((bestClusterPrice - currentPrice).toFixed(3));
+          const nearResistance = Math.abs(distToReaction) <= clusterTolerance;
+          const rejectionOk = this.hasOrderBlockRejectionOrDeceleration(
             m5Candles,
             false,
-            targetReactionPrice - 3.5,
-            targetReactionPrice + 3.5,
+            bestClusterPrice - clusterTolerance,
+            bestClusterPrice + clusterTolerance,
           );
-          if (nearResistance && reversalConfirmed) {
-            return {
-              isViable: true,
-              reason: `En M5 el precio rechazó a la baja la resistencia estructural (${targetReactionPrice})`,
-              targetReactionPrice,
-              distToReaction,
-              reactionType: 'RESISTENCIA_ESTRUCTURAL_M5',
-            };
-          } else {
-            return {
-              isViable: false,
-              reason: nearResistance
-                ? `En M5 esperar cierre de rechazo bajista en resistencia (${targetReactionPrice})`
-                : `En TF M5 el precio está lejos de la resistencia estructural (${targetReactionPrice}; distancia ${distToReaction} pts)`,
-              targetReactionPrice,
-              distToReaction,
-              reactionType: 'RESISTENCIA_ESTRUCTURAL_M5',
-            };
-          }
+          return {
+            isViable: nearResistance && rejectionOk,
+            reason: nearResistance && rejectionOk
+              ? `Doble/Triple resistencia institucional de spikes confirmada en ${bestClusterPrice}`
+              : `Esperar toque y rechazo en cluster de resistencia M5 (${bestClusterPrice}; dist ${distToReaction} pts)`,
+            targetReactionPrice: bestClusterPrice,
+            distToReaction,
+            reactionType: 'RESISTENCIA_ESTRUCTURAL_M5',
+          };
         }
       }
     }
 
-    // 3. Fallback: 50% de retroceso
-    const targetReactionPrice = entryLevel50;
+    // 3. Sin Order Block Fresco ni Cluster de Spikes: NO es viable (se elimina el fallback débil del 50% vacío)
+    const targetReactionPrice = parseFloat(entryLevel50.toFixed(3));
     const distToReaction = parseFloat(Math.abs(currentPrice - targetReactionPrice).toFixed(3));
-    const priceInZone = isBoom ? currentPrice <= entryLevel50 : currentPrice >= entryLevel50;
-    const reversalConfirmed = this.hasClosedM5Reversal(
-      m5Candles,
-      isBoom,
-      entryLevel50 - 3.5,
-      entryLevel50 + 3.5,
-    );
-    const isViable = priceInZone && reversalConfirmed;
     return {
-      isViable,
-      reason: !priceInZone
-        ? `En TF M5 aún no alcanza la zona del 50% (${targetReactionPrice})`
-        : reversalConfirmed
-        ? `En M5 el precio confirmó rechazo en la zona del 50% (${targetReactionPrice})`
-        : `En M5 esperar cierre de rechazo ${isBoom ? 'alcista' : 'bajista'} en la zona del 50% (${targetReactionPrice})`,
+      isViable: false,
+      reason: `Bloqueado: La Caja ${isBoom ? 'Λ' : 'V'} (${targetReactionPrice}) no tiene un Order Block M5 FRESCO ni doble techo/piso de spikes que la respalde`,
       targetReactionPrice,
       distToReaction,
       reactionType: 'RETROCESO_50_M5',
     };
   }
 
-  private hasClosedM5Reversal(
+  /**
+   * Verifica que el precio al entrar al Order Block muestre desaceleración o mecha de rechazo
+   * ANTES de que ocurra el spike (sin esperar a que el spike ya haya cerrado toda la vela M5).
+   */
+  private hasOrderBlockRejectionOrDeceleration(
     m5Candles: any[],
     isBoom: boolean,
     zoneLow: number,
@@ -1074,17 +1125,41 @@ export class CrashIaStrategyService {
   ): boolean {
     if (!m5Candles || m5Candles.length < 3) return false;
 
-    const previous = m5Candles[m5Candles.length - 3];
-    const closed = m5Candles[m5Candles.length - 2];
-    const open = Number(closed.open);
-    const close = Number(closed.close);
-    const previousClose = Number(previous.close);
-    const touchedZone = Number(closed.low) <= zoneHigh && Number(closed.high) >= zoneLow;
-    const reversed = isBoom
-      ? close > open && close > previousClose
-      : close < open && close < previousClose;
+    const current = m5Candles[m5Candles.length - 1];
+    const prev = m5Candles[m5Candles.length - 2];
 
-    return touchedZone && reversed;
+    const cOpen = Number(current.open);
+    const cClose = Number(current.close);
+    const cHigh = Number(current.high);
+    const cLow = Number(current.low);
+    const cBody = Math.abs(cClose - cOpen);
+
+    const pOpen = Number(prev.open);
+    const pClose = Number(prev.close);
+    const pBody = Math.abs(pClose - pOpen);
+
+    const touchedZone =
+      (cLow <= zoneHigh && cHigh >= zoneLow) ||
+      (Number(prev.low) <= zoneHigh && Number(prev.high) >= zoneLow);
+    if (!touchedZone) return false;
+
+    if (!isBoom) {
+      // En Crash (SELL): no haber cerrado por encima de zoneHigh y mostrar mecha superior o desaceleración del cuerpo verde
+      if (cClose > zoneHigh) return false;
+      const upperWick = cHigh - Math.max(cOpen, cClose);
+      const prevUpperWick = Number(prev.high) - Math.max(pOpen, pClose);
+      const hasWickRejection = upperWick >= cBody * 0.2 || prevUpperWick >= pBody * 0.25;
+      const hasDeceleration = cBody <= pBody * 1.15 || cClose <= cOpen;
+      return hasWickRejection || hasDeceleration;
+    } else {
+      // En Boom (BUY): no haber cerrado por debajo de zoneLow y mostrar mecha inferior o desaceleración del cuerpo rojo
+      if (cClose < zoneLow) return false;
+      const lowerWick = Math.min(cOpen, cClose) - cLow;
+      const prevLowerWick = Math.min(pOpen, pClose) - Number(prev.low);
+      const hasWickRejection = lowerWick >= cBody * 0.2 || prevLowerWick >= pBody * 0.25;
+      const hasDeceleration = cBody <= pBody * 1.15 || cClose >= cOpen;
+      return hasWickRejection || hasDeceleration;
+    }
   }
 
   /**
@@ -1108,7 +1183,7 @@ export class CrashIaStrategyService {
    * - En CRASH: Bearish OB -> última vela alcista (verde) previa al spike de caída.
    * - En BOOM: Bullish OB -> última vela bajista (roja) previa al spike de subida.
    * - Calcula: OB Techo, OB Base y OB 50% (Mean Threshold).
-   * - Evalúa el estado: FRESCO (Sin mitigar), EN_ZONA, MITIGADO o INVALIDADO.
+   * - Evalúa el estado: FRESCO (Sin mitigar), EN_ZONA (solo en el PRIMER toque), MITIGADO o INVALIDADO.
    */
   private findOrderBlocks(
     m5Candles: any[],
@@ -1125,9 +1200,8 @@ export class CrashIaStrategyService {
     const lastClosedIndex = m5Candles.length - 2;
     const breakBuffer = Math.max(0.001, minDrop * 0.05);
 
-    // La ultima vela puede seguir abierta. El origen y su BOS deben confirmarse
-    // solamente con velas cerradas.
-    for (let i = lastClosedIndex - 1; i >= Math.max(3, m5Candles.length - 80); i--) {
+    // Solo buscamos Order Blocks recientes (últimas 48 velas M5 = 4 horas)
+    for (let i = lastClosedIndex - 1; i >= Math.max(3, m5Candles.length - 48); i--) {
       const c = m5Candles[i];
       const cOpen = Number(c.open);
       const cClose = Number(c.close);
@@ -1159,8 +1233,6 @@ export class CrashIaStrategyService {
       let impulseHigh = Number.NEGATIVE_INFINITY;
       const impulseEndIndex = Math.min(lastClosedIndex, i + impulseWindow);
 
-      // El impulso puede ocupar hasta tres velas, pero debe cerrar rompiendo el
-      // swing previo. Una mecha o una vela aislada no confirman un OB.
       for (let j = i + 1; j <= impulseEndIndex; j++) {
         const impulseCandle = m5Candles[j];
         const impulseClose = Number(impulseCandle.close);
@@ -1195,26 +1267,34 @@ export class CrashIaStrategyService {
       const obMid50 = parseFloat(((obHigh + obLow) / 2).toFixed(3));
 
       let mitigated = false;
+      let previouslyMitigated = false;
       let broken = false;
 
-      // La mitigacion se cuenta despues de la vela que confirma el impulso/BOS.
+      // Evaluar historial posterior a la confirmación del impulso
       for (let j = confirmationIndex + 1; j < m5Candles.length; j++) {
         const postClose = Number(m5Candles[j].close);
         const postHigh = Number(m5Candles[j].high);
         const postLow = Number(m5Candles[j].low);
+        const isOldCandle = j < m5Candles.length - 2;
 
         if (!isBoom) {
           if (postClose > obHigh) {
             broken = true;
             break;
           }
-          if (postHigh >= obMid50) mitigated = true;
+          if (postHigh >= obMid50) {
+            mitigated = true;
+            if (isOldCandle) previouslyMitigated = true;
+          }
         } else {
           if (postClose < obLow) {
             broken = true;
             break;
           }
-          if (postLow <= obMid50) mitigated = true;
+          if (postLow <= obMid50) {
+            mitigated = true;
+            if (isOldCandle) previouslyMitigated = true;
+          }
         }
       }
 
@@ -1232,9 +1312,14 @@ export class CrashIaStrategyService {
         status = 'INVALIDADO';
         statusLabel = 'Roto / Invalidado ❌';
         statusSeverity = 'negative';
+      } else if (previouslyMitigated) {
+        // Si ya fue tocado en velas anteriores, queda marcado como MITIGADO aunque el precio vuelva a pasar por ahí
+        status = 'MITIGADO';
+        statusLabel = 'Ya mitigado (Descartado) 🔄';
+        statusSeverity = 'info';
       } else if (inZone) {
         status = 'EN_ZONA';
-        statusLabel = isBoom ? '¡En Zona de Compra OB! ⚡' : '¡En Zona de Venta OB! ⚡';
+        statusLabel = isBoom ? '¡1er Toque OB Compra! ⚡' : '¡1er Toque OB Venta! ⚡';
         statusSeverity = 'warning';
       } else if (mitigated) {
         status = 'MITIGADO';
@@ -1259,14 +1344,13 @@ export class CrashIaStrategyService {
         statusLabel,
         statusSeverity,
         distToPrice,
-        inZone,
+        inZone: inZone && !previouslyMitigated,
       });
 
       if (list.length >= 10) break;
     }
 
-    // Solo un OB fresco o actualmente en zona puede estar activo. Los mitigados e
-    // invalidados permanecen en el historial para diagnostico, sin dibujar entradas.
+    // Solo un OB fresco (o en su 1er toque actual) puede estar activo.
     let active: OrderBlockPoint | null = list.find((ob) => ob.status === 'EN_ZONA') || null;
 
     if (!active) {
@@ -1284,29 +1368,69 @@ export class CrashIaStrategyService {
   }
 
   /**
-   * Busca patrones V en M5 para CRASH pegados sobre la línea H1 (donde Low >= h1Price)
+   * Busca patrones V institucionales en M5 para CRASH pegados sobre la línea H1:
+   * - Exige que la vela V sea un spike bajista real (no una micro-vela).
+   * - Solo en las últimas 36 velas M5 (3 horas) y cerca de la línea H1.
+   * - Verifica que la caja V no haya sido rota ni mitigada ya con un spike posterior.
    */
-  private findVPatternM5Crash(m5Candles: any[], h1Price: number): VPatternCandidate | null {
-    if (!m5Candles || m5Candles.length < 3) return null;
+  private findVPatternM5Crash(
+    m5Candles: any[],
+    h1Price: number,
+    m5CandleHeight: number = 2.5,
+    symbol: string = 'CRASH500',
+  ): VPatternCandidate | null {
+    if (!m5Candles || m5Candles.length < 4) return null;
 
     const candidates: VPatternCandidate[] = [];
-    const maxDist = 1000.0;
+    const minSpikeDrop = Math.max(this.getMinSpikeDropForOB(symbol) * 0.7, m5CandleHeight * 1.4);
+    const maxDist = Math.max(m5CandleHeight * 8.0, minSpikeDrop * 2.5);
+    const lookbackStart = Math.max(1, m5Candles.length - 36); // Últimas 3 horas
 
-    for (let k = m5Candles.length - 2; k >= 0; k--) {
+    for (let k = m5Candles.length - 2; k >= lookbackStart; k--) {
       const c = m5Candles[k];
       const open = Number(c.open);
       const close = Number(c.close);
       const low = Number(c.low);
       const high = Number(c.high);
 
-      // Vela roja (bajista)
-      if (close >= open) continue;
+      // Exigir vela bajista de spike real (caída significativa)
+      const drop = open - close;
+      if (drop < minSpikeDrop) continue;
 
       const vLinePrice = low;
       if (vLinePrice < h1Price) continue;
 
       const distToBlue = vLinePrice - h1Price;
       if (distToBlue > maxDist) continue;
+
+      // Validar que la caja proyectada desde este pico V NO haya sido invalidada ni gastada después
+      const candidateCeiling = vLinePrice + 3.0 * m5CandleHeight;
+      const candidateMid50 = vLinePrice + 1.5 * m5CandleHeight;
+      let invalidatedOrSpent = false;
+      let touchedMid50 = false;
+
+      for (let j = k + 1; j < m5Candles.length - 1; j++) {
+        const post = m5Candles[j];
+        const postClose = Number(post.close);
+        const postHigh = Number(post.high);
+        const postDrop = Number(post.open) - postClose;
+
+        // 1. Si el precio cerró superando el techo de la caja V, la zona falló
+        if (postClose > candidateCeiling + m5CandleHeight * 0.35) {
+          invalidatedOrSpent = true;
+          break;
+        }
+        // 2. Si ya subió al 50% y luego dio un spike fuerte en velas pasadas, esa zona V ya reaccionó y se gastó
+        if (touchedMid50 && postDrop >= minSpikeDrop) {
+          invalidatedOrSpent = true;
+          break;
+        }
+        if (postHigh >= candidateMid50) {
+          touchedMid50 = true;
+        }
+      }
+
+      if (invalidatedOrSpent) continue;
 
       candidates.push({
         epoch: Number(c.epoch),
@@ -1317,7 +1441,7 @@ export class CrashIaStrategyService {
         distToBlue,
       });
 
-      if (candidates.length >= 10) break;
+      if (candidates.length >= 6) break;
     }
 
     if (candidates.length === 0) return null;
@@ -1327,30 +1451,70 @@ export class CrashIaStrategyService {
   }
 
   /**
-   * Busca patrones Lambda (V invertida) en M5 para BOOM pegados bajo la línea H1 (donde High <= h1Price)
+   * Busca patrones Lambda (V invertida) institucionales en M5 para BOOM pegados bajo la línea H1:
+   * - Exige que la vela Λ sea un spike alcista real.
+   * - Solo en las últimas 36 velas M5 (3 horas) y cerca de la línea H1 (sin fallback falso sobre H1).
+   * - Verifica que la caja Λ no haya sido rota ni gastada ya con un spike posterior.
    */
-  private findVPatternM5Boom(m5Candles: any[], h1Price: number): VPatternCandidate | null {
-    if (!m5Candles || m5Candles.length < 3) return null;
+  private findVPatternM5Boom(
+    m5Candles: any[],
+    h1Price: number,
+    m5CandleHeight: number = 2.5,
+    symbol: string = 'BOOM500',
+  ): VPatternCandidate | null {
+    if (!m5Candles || m5Candles.length < 4) return null;
 
     const candidates: VPatternCandidate[] = [];
-    const maxDist = 1000.0;
+    const minSpikeJump = Math.max(this.getMinSpikeDropForOB(symbol) * 0.7, m5CandleHeight * 1.4);
+    const maxDist = Math.max(m5CandleHeight * 8.0, minSpikeJump * 2.5);
+    const lookbackStart = Math.max(1, m5Candles.length - 36); // Últimas 3 horas
 
-    for (let k = m5Candles.length - 2; k >= 0; k--) {
+    for (let k = m5Candles.length - 2; k >= lookbackStart; k--) {
       const c = m5Candles[k];
       const open = Number(c.open);
       const close = Number(c.close);
       const low = Number(c.low);
       const high = Number(c.high);
 
-      // Vela verde (spike alcista previo en Boom)
-      if (close <= open) continue;
+      // Exigir vela alcista de spike real (subida significativa)
+      const jump = close - open;
+      if (jump < minSpikeJump) continue;
 
       const vLinePrice = high;
-      // En Boom, el retroceso institucional se opera pegado y por debajo de la línea H1
+      // En Boom, el retroceso institucional se opera estrictamente pegado y por debajo de la línea H1
       if (vLinePrice > h1Price) continue;
 
       const distToBlue = h1Price - vLinePrice;
       if (distToBlue > maxDist) continue;
+
+      // Validar que la caja proyectada desde este pico Λ NO haya sido invalidada ni gastada después
+      const candidateFloor = vLinePrice - 3.0 * m5CandleHeight;
+      const candidateMid50 = vLinePrice - 1.5 * m5CandleHeight;
+      let invalidatedOrSpent = false;
+      let touchedMid50 = false;
+
+      for (let j = k + 1; j < m5Candles.length - 1; j++) {
+        const post = m5Candles[j];
+        const postClose = Number(post.close);
+        const postLow = Number(post.low);
+        const postJump = postClose - Number(post.open);
+
+        // 1. Si el precio cerró perforando el piso de la caja Λ, la zona falló
+        if (postClose < candidateFloor - m5CandleHeight * 0.35) {
+          invalidatedOrSpent = true;
+          break;
+        }
+        // 2. Si ya bajó al 50% y luego dio un spike fuerte en velas pasadas, esa zona Λ ya reaccionó y se gastó
+        if (touchedMid50 && postJump >= minSpikeJump) {
+          invalidatedOrSpent = true;
+          break;
+        }
+        if (postLow <= candidateMid50) {
+          touchedMid50 = true;
+        }
+      }
+
+      if (invalidatedOrSpent) continue;
 
       candidates.push({
         epoch: Number(c.epoch),
@@ -1361,26 +1525,10 @@ export class CrashIaStrategyService {
         distToBlue,
       });
 
-      if (candidates.length >= 10) break;
+      if (candidates.length >= 6) break;
     }
 
-    if (candidates.length === 0) {
-      // Fallback: Si no hay spike por debajo de H1, tomar la última vela verde significativa
-      for (let k = m5Candles.length - 2; k >= Math.max(0, m5Candles.length - 30); k--) {
-        const c = m5Candles[k];
-        if (Number(c.close) > Number(c.open)) {
-          return {
-            epoch: Number(c.epoch),
-            timeStr: new Date(Number(c.epoch) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            priceLow: Number(c.low),
-            priceHigh: Number(c.high),
-            vLinePrice: Number(c.high),
-            distToBlue: Math.abs(Number(c.high) - h1Price),
-          };
-        }
-      }
-      return null;
-    }
+    if (candidates.length === 0) return null;
 
     candidates.sort((a, b) => a.distToBlue - b.distToBlue);
     return candidates[0];
