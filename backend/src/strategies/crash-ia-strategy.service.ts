@@ -135,6 +135,28 @@ export interface CrashIaEvaluation {
   gaps?: CrashIaGapLevel[];
 }
 
+export interface SpikeRadarEntry {
+  symbol:              string;
+  mercado:             string;
+  marketType:          'CRASH' | 'BOOM';
+  operationType:       'SELL' | 'BUY';
+  currentPrice:        number;
+  entryLevel50:        number;
+  stopLossPrice:       number;
+  h1LinePrice:         number;
+  vLinePrice:          number;
+  obStatus:            'FRESCO' | 'EN_ZONA' | 'MITIGADO' | 'INVALIDADO';
+  obMid50:             number;
+  obDistToPrice:       number;
+  rsi_M5:              number;
+  trendM15:            'BAJISTA' | 'ALCISTA';
+  m5ViabilityReason:   string;
+  velaAmigaMsg:        string;
+  score:               number;
+  canSell:             boolean;
+  canBuy:              boolean;
+}
+
 @Injectable()
 export class CrashIaStrategyService {
   private readonly logger = new Logger(CrashIaStrategyService.name);
@@ -541,6 +563,84 @@ export class CrashIaStrategyService {
         reason: retestInfo.reason,
       },
     };
+  }
+
+  /**
+   * Spike Radar: retorna SOLO los índices con condiciones institucionales completas para spike inminente.
+   * Criterios ultra-estrictos (deben cumplirse TODOS):
+   *  1. canSell || canBuy  → señal verde completa
+   *  2. vCandidate presente y fresco (spike real verificado)
+   *  3. activeOrderBlock en status FRESCO o EN_ZONA con inZone = true
+   *  4. m5Viability.isViable = true
+   *  5. filters.velaAmigaOk = true
+   *  6. filters.greenOk = true (velas de enfriamiento M1 listas)
+   *  7. filters.trendOk = true (EMA50 M15 confirma dirección)
+   *  8. activeOrderBlock.distToPrice <= 1.5 * m5CandleHeight  (precio dentro o muy cerca del OB)
+   *  9. RSI M5 no sobreextendido: crash < 55, boom > 45
+   */
+  async getSpikeRadar(): Promise<SpikeRadarEntry[]> {
+    const all: CrashIaEvaluation[] = [];
+    for (const s of CRASH_BOOM_IA_SYMBOLS) {
+      all.push(await this.evaluateSymbol(s.symbol, 5));
+    }
+
+    const radar: SpikeRadarEntry[] = [];
+    for (const ev of all) {
+      const hasSignal = ev.canSell || ev.canBuy;
+      if (!hasSignal) continue;
+
+      const ob = ev.activeOrderBlock;
+      const obOk = ob && (ob.status === 'FRESCO' || ob.status === 'EN_ZONA') && ob.inZone;
+      if (!obOk) continue;
+
+      if (!ev.vCandidate) continue;
+      if (!ev.m5Viability?.isViable) continue;
+      if (!ev.filters?.velaAmigaOk) continue;
+      if (!ev.filters?.greenOk) continue;
+      if (!ev.filters?.trendOk) continue;
+
+      // Precio debe estar dentro o máximo 1.5 alturas de vela M5 del OB
+      const proximity = ob.distToPrice <= ev.m5CandleHeight * 1.5;
+      if (!proximity) continue;
+
+      // RSI no sobreextendido
+      const rsi = ev.filters.rsi_M5;
+      if (ev.marketType === 'CRASH' && rsi >= 55) continue;
+      if (ev.marketType === 'BOOM'  && rsi <= 45) continue;
+
+      // Calcular score de confianza (0–100)
+      let score = 60;
+      if (ob.status === 'FRESCO') score += 15;
+      if (ob.inZone) score += 10;
+      if (ev.marketType === 'CRASH' && rsi < 45) score += 5;
+      if (ev.marketType === 'BOOM'  && rsi > 55) score += 5;
+      if (ob.distToPrice <= ev.m5CandleHeight * 0.5) score += 10; // precio dentro del OB exacto
+
+      radar.push({
+        symbol:         ev.symbol,
+        mercado:        ev.mercado,
+        marketType:     ev.marketType,
+        operationType:  ev.operationType,
+        currentPrice:   ev.currentPrice,
+        entryLevel50:   ev.entryLevel50,
+        stopLossPrice:  ev.stopLossPrice,
+        h1LinePrice:    ev.h1LinePrice,
+        vLinePrice:     ev.vLinePrice,
+        obStatus:       ob.status,
+        obMid50:        ob.mid50,
+        obDistToPrice:  parseFloat(ob.distToPrice.toFixed(3)),
+        rsi_M5:         parseFloat(rsi.toFixed(1)),
+        trendM15:       ev.filters.trendM15,
+        m5ViabilityReason: ev.m5Viability.reason,
+        velaAmigaMsg:   ev.filters.velaAmigaMsg,
+        score:          Math.min(100, score),
+        canSell:        ev.canSell,
+        canBuy:         ev.canBuy,
+      });
+    }
+
+    // Ordenar por score descendente
+    return radar.sort((a, b) => b.score - a.score);
   }
 
   /**

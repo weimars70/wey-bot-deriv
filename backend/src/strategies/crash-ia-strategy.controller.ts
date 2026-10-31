@@ -28,6 +28,16 @@ export class CrashIaStrategyController {
     return this.crashIaService.getSummaryAll();
   }
 
+  /**
+   * GET /api/strategies/crash-ia/spike-radar
+   * Retorna ÚNICAMENTE los índices con condiciones institucionales completas para spike inminente.
+   * Filtro ultra-estricto: canSell|canBuy + OB fresco en zona + V-patrón + M5 viable + velaAmiga + greenOk + trendOk + precio ≤1.5x altura M5 del OB + RSI no sobreextendido.
+   */
+  @Get('spike-radar')
+  async spikeRadar() {
+    return this.crashIaService.getSpikeRadar();
+  }
+
   @Get('double-wick')
   async doubleWick(@Query('symbol') symbol?: string) {
     const sym = symbol || 'BOOM100';
