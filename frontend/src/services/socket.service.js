@@ -16,8 +16,7 @@ export function getSocket() {
   const isNativeMobile = typeof window !== 'undefined' && (
     window.Capacitor !== undefined ||
     window.location.protocol === 'capacitor:' ||
-    window.location.protocol === 'file:' ||
-    (window.location.origin.includes('localhost') && !window.location.port)
+    window.location.protocol === 'file:'
   );
   const isSubpathBot = typeof window !== 'undefined' && window.location.pathname.startsWith('/bot');
   const socketUrl = isNativeMobile ? 'http://2.58.80.90/realtime' : '/realtime';
