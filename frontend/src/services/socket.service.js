@@ -1,26 +1,22 @@
-import { io } from 'socket.io-client';
+﻿import { io } from 'socket.io-client';
 import { useAuthStore } from 'stores/auth.store';
 
 let socket = null;
 
-/**
- * Devuelve una única conexión (singleton) al namespace /realtime del
- * backend, autenticada con el JWT de sesión. Si el token cambia (login/
- * logout), hay que llamar a disconnectSocket() para forzar una reconexión
- * con las nuevas credenciales.
- */
 export function getSocket() {
   if (socket) return socket;
 
   const authStore = useAuthStore();
-  const isNativeMobile = typeof window !== 'undefined' && (
-    window.Capacitor !== undefined ||
-    window.location.protocol === 'capacitor:' ||
-    window.location.protocol === 'file:'
+  const isBrowser = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+
+  // Si estamos en navegador local, SIEMPRE usar ruta relativa al proxy local de desarrollo
+  const socketUrl = isBrowser ? '/realtime' : (
+    (typeof window !== 'undefined' && (window.location.protocol === 'capacitor:' || window.location.protocol === 'file:'))
+      ? 'http://2.58.80.90/realtime'
+      : '/realtime'
   );
-  const isSubpathBot = typeof window !== 'undefined' && window.location.pathname.startsWith('/bot');
-  const socketUrl = isNativeMobile ? 'http://2.58.80.90/realtime' : '/realtime';
-  const socketPath = (isNativeMobile || isSubpathBot) ? '/bot/socket.io' : '/socket.io';
+
+  const socketPath = '/bot/socket.io';
 
   socket = io(socketUrl, {
     path: socketPath,
