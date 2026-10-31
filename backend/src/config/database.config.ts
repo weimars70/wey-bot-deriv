@@ -22,7 +22,7 @@ export default registerAs(
     synchronize: false,
     logging: false,
     extra: {
-      max: parseInt(process.env.DB_POOL_MAX || '2', 10),
+      max: parseInt(process.env.DB_POOL_MAX || '6', 10),
       min: 0,
       connectionTimeoutMillis: 15000,
       idleTimeoutMillis: 3000,

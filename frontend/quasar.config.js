@@ -15,7 +15,7 @@ function makeProxyTarget(extraOpts = {}) {
   return {
     target: 'http://127.0.0.1:3038',
     changeOrigin: true,
-    ...(isWs ? {} : { proxyTimeout: 15000, timeout: 15000 }),
+    ...(isWs ? {} : { proxyTimeout: 60000, timeout: 60000 }),
     ...extraOpts,
     // Suprime ECONNRESET / ECONNREFUSED del log ruidoso de Vite y devuelve 503 limpio
     configure(proxy) {

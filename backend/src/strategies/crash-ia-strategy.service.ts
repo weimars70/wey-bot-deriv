@@ -160,7 +160,7 @@ export interface SpikeRadarEntry {
 @Injectable()
 export class CrashIaStrategyService {
   private readonly logger = new Logger(CrashIaStrategyService.name);
-  private readonly evaluationCacheTtlMs = 5 * 1000;
+  private readonly evaluationCacheTtlMs = 15 * 1000;
   private readonly evaluationCache = new Map<string, { expiresAt: number; value: CrashIaEvaluation }>();
   private readonly evaluationsInFlight = new Map<string, Promise<CrashIaEvaluation>>();
   private readonly watchedLevelsCache = new Map<string, { expiresAt: number; rows: WatchedEntryLevel[] }>();
