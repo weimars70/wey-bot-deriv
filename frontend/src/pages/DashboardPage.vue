@@ -1,16 +1,16 @@
 <template>
   <q-page class="q-pa-md dashboard-page">
 
-    <!-- ═══════════════════════════════════════════════════════════════
-         SECCIÓN 1 · SPIKE RADAR — Crash & Boom IA · Zonas V y H1
-         Solo índices con condiciones institucionales 100% completas
-    ════════════════════════════════════════════════════════════════ -->
+    <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+         SECCIÃ“N 1 Â· SPIKE RADAR â€” Crash & Boom IA Â· Zonas V y H1
+         Solo Ã­ndices con condiciones institucionales 100% completas
+    â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
     <div class="section-header spike-radar-header q-mb-md row items-center justify-between">
       <div class="row items-center q-gutter-sm">
         <span class="live-pulse-dot radar-pulse" :class="{ active: spikeRadarList.length > 0 }" />
         <div>
           <div class="radar-title row items-center q-gutter-xs">
-            <span>🎯 Spike Radar · Crash &amp; Boom IA</span>
+            <span>ðŸŽ¯ Spike Radar Â· Crash &amp; Boom IA</span>
             <span class="radar-tag">ULTRA-SNIPER</span>
             <q-badge
               v-if="spikeRadarList.length"
@@ -20,9 +20,9 @@
             />
           </div>
           <div class="section-sub">
-            Señal ACTIVA: canSell/canBuy + OB fresco en zona + V-patrón real + M5 viable + Vela Amiga + Enfriamiento M1 + Tendencia M15 + precio en OB · ordenado por score
+            SeÃ±al ACTIVA: canSell/canBuy + OB fresco en zona + V-patrÃ³n real + M5 viable + Vela Amiga + Enfriamiento M1 + Tendencia M15 + precio en OB Â· ordenado por score
             <span v-if="lastRadarUpdate" class="q-ml-xs">
-              · calculado {{ lastRadarUpdateTime }}
+              Â· calculado {{ lastRadarUpdateTime }}
             </span>
           </div>
         </div>
@@ -45,9 +45,9 @@
           color="red-9"
           icon="open_in_new"
           label="Ver estrategia completa"
-          to="/crash-ia-strategy"
+          to="/crash-ia"
         >
-          <q-tooltip>Abrir página Crash &amp; Boom IA · Zonas V y H1</q-tooltip>
+          <q-tooltip>Abrir EA WEY SMC</q-tooltip>
         </q-btn>
       </div>
     </div>
@@ -59,7 +59,7 @@
       </div>
     </div>
 
-    <!-- Radar vacío -->
+    <!-- Radar vacÃ­o -->
     <div
       v-else-if="!radarLoading && !spikeRadarList.length"
       class="radar-empty q-pa-lg text-center q-mb-xl"
@@ -69,7 +69,7 @@
         Sin alertas Spike Radar en este momento
       </div>
       <div class="text-caption text-slate-400 q-mt-xs">
-        Los 10 índices están siendo monitoreados. Se alertará cuando un índice cumpla todos los filtros institucionales simultáneamente.
+        Los 10 Ã­ndices estÃ¡n siendo monitoreados. Se alertarÃ¡ cuando un Ã­ndice cumpla todos los filtros institucionales simultÃ¡neamente.
       </div>
     </div>
 
@@ -90,7 +90,7 @@
             <!-- Header: Mercado + Score -->
             <div class="row items-center justify-between q-mb-sm">
               <div class="row items-center q-gutter-xs">
-                <span class="radar-market-icon">{{ entry.marketType === 'CRASH' ? '📉' : '📈' }}</span>
+                <span class="radar-market-icon">{{ entry.marketType === 'CRASH' ? 'ðŸ“‰' : 'ðŸ“ˆ' }}</span>
                 <span class="radar-mercado">{{ entry.mercado }}</span>
                 <q-badge
                   :color="entry.canSell ? 'red-8' : 'green-8'"
@@ -118,19 +118,19 @@
                 <div class="radar-value text-negative">{{ entry.stopLossPrice }}</div>
               </div>
               <div class="col-6">
-                <div class="radar-label">Línea H1</div>
+                <div class="radar-label">LÃ­nea H1</div>
                 <div class="radar-value text-indigo-7">{{ entry.h1LinePrice }}</div>
               </div>
             </div>
 
             <!-- Badges de confirmaciones -->
             <div class="row q-gutter-xs q-mb-sm">
-              <q-badge outline color="teal-7" label="✓ OB" />
-              <q-badge outline color="teal-7" label="✓ V-Patrón" />
-              <q-badge outline color="teal-7" label="✓ M5 Viable" />
-              <q-badge outline color="teal-7" label="✓ Vela Amiga" />
-              <q-badge outline color="teal-7" label="✓ Enfriamiento" />
-              <q-badge outline color="teal-7" label="✓ Tendencia M15" />
+              <q-badge outline color="teal-7" label="âœ“ OB" />
+              <q-badge outline color="teal-7" label="âœ“ V-PatrÃ³n" />
+              <q-badge outline color="teal-7" label="âœ“ M5 Viable" />
+              <q-badge outline color="teal-7" label="âœ“ Vela Amiga" />
+              <q-badge outline color="teal-7" label="âœ“ Enfriamiento" />
+              <q-badge outline color="teal-7" label="âœ“ Tendencia M15" />
               <q-badge
                 :color="entry.obStatus === 'FRESCO' ? 'green-8' : 'amber-8'"
                 :label="entry.obStatus"
@@ -141,7 +141,7 @@
             <div class="row items-center justify-between">
               <div class="text-caption text-slate-500">
                 RSI M5: <strong>{{ entry.rsi_M5 }}</strong>
-                · {{ entry.trendM15 }}
+                Â· {{ entry.trendM15 }}
               </div>
               <q-btn
                 flat
@@ -149,31 +149,143 @@
                 size="xs"
                 color="indigo-7"
                 icon="open_in_new"
-                :to="`/crash-ia-strategy?symbol=${entry.symbol}`"
+                :to="`/crash-ia?symbol=${entry.symbol}`"
               >
-                <q-tooltip>Ver análisis completo de {{ entry.mercado }}</q-tooltip>
+                <q-tooltip>Ver anÃ¡lisis completo de {{ entry.mercado }}</q-tooltip>
               </q-btn>
             </div>
           </q-card-section>
         </q-card>
       </div>
     </div>
-
     <!-- ═══════════════════════════════════════════════════════════════
-         SECCIÓN 2 · MOTOR WEY — Señales Sniper generales
+         SECCIÓN 1.5 · EA WEY SMC — Índices listos para operar
     ════════════════════════════════════════════════════════════════ -->
+    <div class="section-header smc-section-header q-mb-md row items-center justify-between">
+      <div class="row items-center q-gutter-sm">
+        <span class="live-pulse-dot smc-pulse" :class="{ active: smcReadyList.length > 0 }" />
+        <div>
+          <div class="smc-title row items-center q-gutter-xs">
+            <span>🤖 EA WEY SMC · Listos para Operar</span>
+            <span class="smc-tag">AUTO</span>
+            <q-badge
+              v-if="smcReadyList.length"
+              color="purple-8"
+              :label="smcReadyList.length"
+              class="q-ml-xs"
+            />
+          </div>
+          <div class="section-sub">
+            Scanner automático de condiciones SMC: sesgo HTF H1 · zona activa · pullback · CHoCH · descuento/premium
+            <span v-if="lastSmcUpdate" class="q-ml-xs">
+              · actualizado {{ lastSmcUpdateTime }}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="row items-center q-gutter-sm">
+        <q-btn
+          unelevated
+          color="purple-7"
+          icon="refresh"
+          label="Actualizar"
+          dense
+          class="q-px-sm"
+          :loading="smcLoading"
+          @click="loadSmcScanner"
+        />
+        <q-btn
+          flat
+          dense
+          color="purple-7"
+          icon="open_in_new"
+          label="VER SCANNER COMPLETO"
+          to="/ea-wey-smc"
+        >
+          <q-tooltip>Ver análisis completo de los 10 índices</q-tooltip>
+        </q-btn>
+      </div>
+    </div>
+
+    <!-- SMC loading skeletons -->
+    <div v-if="smcLoading && !smcAllResults.length" class="row q-col-gutter-md q-mb-xl">
+      <div v-for="i in 3" :key="i" class="col-12 col-sm-6 col-lg-4">
+        <q-skeleton type="rect" height="120px" style="border-radius:12px;" />
+      </div>
+    </div>
+
+    <!-- Sin índices listos -->
+    <div
+      v-else-if="!smcLoading && !smcReadyList.length"
+      class="radar-empty q-pa-lg text-center q-mb-xl"
+    >
+      <q-icon name="hourglass_empty" size="36px" color="grey-5" />
+      <div class="text-subtitle2 text-weight-bold text-slate-500 q-mt-sm">
+        Sin índices listos para el EA en este momento
+      </div>
+      <div class="text-caption text-slate-400 q-mt-xs">
+        Los 10 índices están siendo evaluados. Se mostrará cuando alguno cumpla todas las condiciones SMC.
+      </div>
+    </div>
+
+    <!-- Cards compactas de índices listos -->
+    <div v-else class="row q-col-gutter-md q-mb-xl">
+      <div
+        v-for="item in smcReadyList"
+        :key="item.symbol"
+        class="col-12 col-sm-6 col-lg-4"
+      >
+        <q-card
+          class="smc-compact-card"
+          :class="item.direction === 'BUY' ? 'smc-compact--boom' : 'smc-compact--crash'"
+          flat bordered
+        >
+          <q-card-section class="q-pa-md">
+            <div class="row items-center justify-between q-mb-xs">
+              <div class="row items-center q-gutter-xs">
+                <span style="font-size:16px;">{{ item.direction === 'BUY' ? '📈' : '📉' }}</span>
+                <span class="smc-compact-symbol">{{ item.name }}</span>
+                <q-badge :color="item.direction === 'BUY' ? 'green-8' : 'red-8'" :label="item.direction" class="text-weight-bold" />
+              </div>
+              <div class="row items-center q-gutter-xs">
+                <span v-for="n in 7" :key="n" style="font-size:11px;" :style="{ color: n <= item.score ? '#d97706' : '#cbd5e1' }">★</span>
+                <q-badge color="green-7" label="LISTO ✓" class="text-weight-bold q-ml-xs" />
+              </div>
+            </div>
+            <div class="row q-gutter-xs q-mb-xs">
+              <q-badge :outline="!item.conditions.htfBias" :color="item.conditions.htfBias ? 'teal-7' : 'grey-5'" :label="'HTF ' + item.conditions.htfBiasLabel.slice(0,3)" class="text-weight-bold" />
+              <q-badge :outline="!item.conditions.hasActiveZone" :color="item.conditions.hasActiveZone ? 'teal-7' : 'grey-5'" label="ZONA" class="text-weight-bold" />
+              <q-badge :outline="!item.conditions.hasPullback" :color="item.conditions.hasPullback ? 'teal-7' : 'grey-5'" label="PB" class="text-weight-bold" />
+              <q-badge :outline="!item.conditions.hasChoCH" :color="item.conditions.hasChoCH ? 'teal-7' : 'grey-5'" label="CHoCH" class="text-weight-bold" />
+              <q-badge :outline="!item.conditions.inDiscountPremium" :color="item.conditions.inDiscountPremium ? 'teal-7' : 'grey-5'" :label="item.direction === 'BUY' ? 'DESC' : 'PREM'" class="text-weight-bold" />
+              <q-badge :outline="!item.conditions.hasRecentSpike" :color="item.conditions.hasRecentSpike ? 'amber-7' : 'grey-5'" label="SPIKE" class="text-weight-bold" />
+              <q-badge :outline="!item.conditions.notExhausted" :color="item.conditions.notExhausted ? 'teal-7' : 'grey-5'" label="45%" class="text-weight-bold" />
+            </div>
+            <div class="row items-center justify-between">
+              <span class="text-caption text-slate-500">Precio: <strong class="text-slate-800">{{ item.currentPrice }}</strong></span>
+              <span class="text-caption text-slate-500">Rango: <strong :class="item.direction === 'BUY' ? 'text-green-7' : 'text-red-7'">{{ item.pricePosition }}%</strong></span>
+            </div>
+          </q-card-section>
+        </q-card>
+      </div>
+    </div>
+
+
+    <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+         SECCIÃ“N 2 Â· MOTOR WEY â€” SeÃ±ales Sniper generales
+    â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
     <div class="section-header wey-section-header q-mb-md row items-center justify-between">
       <div class="row items-center q-gutter-sm">
         <span class="live-pulse-dot wey-pulse active" />
         <div>
           <div class="wey-title row items-center q-gutter-xs">
-            <span>⚡ Wey Trading · Sala de Operaciones</span>
+            <span>âš¡ Wey Trading Â· Sala de Operaciones</span>
             <span class="wey-tag">MOTOR SNIPER</span>
           </div>
           <div class="section-sub">
-            Filtro institucional estricto: Order Block (30%–85%) · Estructura M15 · Confluencia 4H+1H+15M · Recorrido ≤ 45%
+            Filtro institucional estricto: Order Block (30%â€“85%) Â· Estructura M15 Â· Confluencia 4H+1H+15M Â· Recorrido â‰¤ 45%
             <span v-if="lastWeyUpdate" class="q-ml-xs">
-              · calculado {{ lastWeyUpdateTime }}
+              Â· calculado {{ lastWeyUpdateTime }}
             </span>
           </div>
         </div>
@@ -183,7 +295,7 @@
         <div v-if="rawWeySignals.length" class="evaluation-clock-pill row items-center q-px-sm q-py-xs">
           <span class="text-caption text-weight-bold text-slate-700">
             Viables: <span class="text-positive text-weight-bolder">{{ viableCount }}</span>/{{ rawWeySignals.length }}
-            · Sniper 4★: <span class="text-amber-9 text-weight-bolder">{{ sniperCount }}</span>
+            Â· Sniper 4â˜…: <span class="text-amber-9 text-weight-bolder">{{ sniperCount }}</span>
           </span>
         </div>
 
@@ -191,9 +303,9 @@
         <div class="evaluation-clock-pill row items-center q-px-sm q-py-xs">
           <q-icon name="timer" size="14px" class="q-mr-xs text-indigo-7" />
           <span class="text-caption text-weight-bold text-slate-700">
-            Próxima evaluación: <span class="text-indigo-9 text-weight-bolder">{{ countdownText }}</span> ({{ nextEvaluationTime }})
+            PrÃ³xima evaluaciÃ³n: <span class="text-indigo-9 text-weight-bolder">{{ countdownText }}</span> ({{ nextEvaluationTime }})
           </span>
-          <q-tooltip>Evaluación anticipada a las :13, :28 y :43</q-tooltip>
+          <q-tooltip>EvaluaciÃ³n anticipada a las :13, :28 y :43</q-tooltip>
         </div>
 
         <q-toggle
@@ -203,17 +315,17 @@
           label="Solo Viables"
           class="text-caption text-weight-bold text-slate-700"
         >
-          <q-tooltip>Exige Order Block activo (30%–85%), estructura M15 limpia, ≥2 spikes/3h, 4H+1H+15M alineados y recorrido ≤45%</q-tooltip>
+          <q-tooltip>Exige Order Block activo (30%â€“85%), estructura M15 limpia, â‰¥2 spikes/3h, 4H+1H+15M alineados y recorrido â‰¤45%</q-tooltip>
         </q-toggle>
 
         <q-toggle
           v-model="onlySniperFourStars"
           color="amber-9"
           dense
-          label="Solo 4★ Sniper"
+          label="Solo 4â˜… Sniper"
           class="text-caption text-weight-bold text-slate-700"
         >
-          <q-tooltip>Muestra únicamente entradas 4★ con alineación perfecta 4/4, OB activo, ≥3 spikes/3h y R/B ≥8.5</q-tooltip>
+          <q-tooltip>Muestra Ãºnicamente entradas 4â˜… con alineaciÃ³n perfecta 4/4, OB activo, â‰¥3 spikes/3h y R/B â‰¥8.5</q-tooltip>
         </q-toggle>
 
         <q-toggle
@@ -221,10 +333,10 @@
           v-model="onlyThreeStars"
           color="indigo-7"
           dense
-          label="Solo 3★ o más"
+          label="Solo 3â˜… o mÃ¡s"
           class="text-caption text-weight-bold text-slate-700"
         >
-          <q-tooltip>Mostrar solo señales locales con 3 o 4 estrellas</q-tooltip>
+          <q-tooltip>Mostrar solo seÃ±ales locales con 3 o 4 estrellas</q-tooltip>
         </q-toggle>
 
         <q-btn
@@ -266,10 +378,10 @@
     >
       <q-icon name="stars" size="44px" color="amber-7" />
       <div class="text-subtitle1 text-weight-bold text-slate-800 q-mt-sm">
-        No hay señales Wey {{ onlySniperFourStars ? '4★ Sniper' : 'viables' }} en este momento
+        No hay seÃ±ales Wey {{ onlySniperFourStars ? '4â˜… Sniper' : 'viables' }} en este momento
       </div>
       <div class="text-caption text-slate-500 q-mt-xs">
-        El motor Sniper filtra entradas sin Order Block activo (30%–85%), sin estructura M15 limpia, con recorrido agotado (&gt;45%) o en mercados fríos (&lt;2 spikes en 3h).
+        El motor Sniper filtra entradas sin Order Block activo (30%â€“85%), sin estructura M15 limpia, con recorrido agotado (&gt;45%) o en mercados frÃ­os (&lt;2 spikes en 3h).
       </div>
       <div class="row items-center justify-center q-gutter-sm q-mt-md">
         <q-btn
@@ -277,7 +389,7 @@
           outline
           dense
           color="amber-9"
-          label="Ver también señales 3★ viables"
+          label="Ver tambiÃ©n seÃ±ales 3â˜… viables"
           class="q-px-sm text-weight-bold"
           @click="onlySniperFourStars = false"
         />
@@ -286,7 +398,7 @@
           outline
           dense
           color="primary"
-          label="Ver diagnóstico de todos los índices (incl. no viables)"
+          label="Ver diagnÃ³stico de todos los Ã­ndices (incl. no viables)"
           class="q-px-sm text-weight-bold"
           @click="onlyViable = false; onlySniperFourStars = false; onlyThreeStars = false"
         />
@@ -295,7 +407,7 @@
           flat
           dense
           color="slate-700"
-          label="Mostrar también 1★ y 2★"
+          label="Mostrar tambiÃ©n 1â˜… y 2â˜…"
           class="q-px-sm text-weight-bold"
           @click="onlyThreeStars = false"
         />
@@ -321,8 +433,9 @@ import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { weySignalsService } from 'src/services/weySignals.service';
 import { api } from 'src/boot/axios';
 import WeySignalCard from 'src/components/WeySignalCard.vue';
+import { eaWeySMCService } from 'src/services/eaWeySMC.service.js';
 
-// ─── Spike Radar (Crash & Boom IA) ──────────────────────────────────────────
+// â”€â”€â”€ Spike Radar (Crash & Boom IA) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const radarLoading    = ref(false);
 const spikeRadarList  = ref([]);
 const lastRadarUpdate = ref(null);
@@ -346,7 +459,34 @@ async function loadSpikeRadar() {
   }
 }
 
-// ─── Wey Signals (Motor Sniper) ─────────────────────────────────────────────
+
+// ─── EA WEY SMC Scanner ──────────────────────────────────────────────────────
+const smcLoading    = ref(false);
+const smcAllResults = ref([]);
+const lastSmcUpdate = ref(null);
+let smcTimer        = null;
+
+const smcReadyList = computed(() => smcAllResults.value.filter((r) => r.ready));
+
+const lastSmcUpdateTime = computed(() => {
+  if (!lastSmcUpdate.value) return '';
+  return new Date(lastSmcUpdate.value).toLocaleTimeString();
+});
+
+async function loadSmcScanner() {
+  smcLoading.value = true;
+  try {
+    const data = await eaWeySMCService.scan();
+    smcAllResults.value = Array.isArray(data) ? data : [];
+    lastSmcUpdate.value = new Date().toISOString();
+  } catch (err) {
+    console.error('Error al cargar EA WEY SMC scanner:', err);
+  } finally {
+    smcLoading.value = false;
+  }
+}
+
+// â”€â”€â”€ Wey Signals (Motor Sniper) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const weyLoading          = ref(false);
 const rawWeySignals       = ref([]);
@@ -396,7 +536,7 @@ function updateCountdown() {
   nextEvaluationTime.value = targetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// Señales locales Wey ordenadas por estrellas de mayor a menor (4★ → 3★)
+// SeÃ±ales locales Wey ordenadas por estrellas de mayor a menor (4â˜… â†’ 3â˜…)
 const weySignalsList = computed(() => {
   let list = rawWeySignals.value;
   if (onlyViable.value) {
@@ -429,7 +569,7 @@ async function loadWeySignals() {
       lastWeyUpdate.value = res.lastUpdated || new Date().toISOString();
     }
   } catch (err) {
-    console.error('Error al cargar señales Wey:', err);
+    console.error('Error al cargar seÃ±ales Wey:', err);
   } finally {
     weyLoading.value = false;
   }
@@ -442,11 +582,15 @@ onMounted(() => {
   countdownTimer = setInterval(updateCountdown, 1000);
   // Actualizar el radar cada 30 segundos
   radarTimer = setInterval(loadSpikeRadar, 30_000);
+  // SMC Scanner: cargar y actualizar cada 60 segundos
+  loadSmcScanner();
+  smcTimer = setInterval(loadSmcScanner, 60_000);
 });
 
 onUnmounted(() => {
   if (countdownTimer) clearInterval(countdownTimer);
   if (radarTimer) clearInterval(radarTimer);
+  if (smcTimer) clearInterval(smcTimer);
 });
 </script>
 
@@ -456,7 +600,7 @@ onUnmounted(() => {
   min-height: 100vh;
 }
 
-/* ── Spike Radar section ─────────────────────────────────────────────────── */
+/* â”€â”€ Spike Radar section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .spike-radar-header {
   border-bottom: 2px solid #fca5a5;
   padding-bottom: 12px;
@@ -550,7 +694,7 @@ onUnmounted(() => {
 .text-slate-500 { color: #64748b; }
 .text-slate-400 { color: #94a3b8; }
 
-/* ── Section Headers ─────────────────────────────────────────────────────── */
+/* â”€â”€ Section Headers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .section-header {
   border-bottom: 1px solid #e2e8f0;
   padding-bottom: 12px;
@@ -584,7 +728,7 @@ onUnmounted(() => {
   margin-top: 2px;
 }
 
-/* ── Live Pulse Dots ─────────────────────────────────────────────────────── */
+/* â”€â”€ Live Pulse Dots â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .live-pulse-dot {
   display:       inline-block;
   width:         8px;
@@ -619,4 +763,61 @@ onUnmounted(() => {
   border-radius: 8px;
 }
 
+
+/* ── EA WEY SMC Section ──────────────────────────────────────────────────── */
+.smc-section-header {
+  border-top:    1px solid #e2e8f0;
+  padding-top:   24px;
+  border-bottom: 2px solid #d8b4fe;
+  padding-bottom: 12px;
+}
+
+.smc-title {
+  font-size:      17px;
+  font-weight:    800;
+  color:          #7c3aed;
+  letter-spacing: 0.3px;
+}
+
+.smc-tag {
+  font-size:      9px;
+  font-weight:    800;
+  background:     #ede9fe;
+  color:          #7c3aed;
+  padding:        2px 6px;
+  border-radius:  4px;
+  letter-spacing: 0.8px;
+}
+
+.smc-compact-card {
+  border-radius: 12px;
+  transition:    box-shadow 0.2s;
+}
+.smc-compact-card:hover {
+  box-shadow: 0 4px 16px 0 rgba(124, 58, 237, 0.12);
+}
+.smc-compact--crash {
+  border-color: #fca5a5 !important;
+  background:   linear-gradient(135deg, #fff5f5 0%, #fff 100%);
+}
+.smc-compact--boom {
+  border-color: #86efac !important;
+  background:   linear-gradient(135deg, #f0fdf4 0%, #fff 100%);
+}
+.smc-compact-symbol {
+  font-size:   14px;
+  font-weight: 800;
+  color:       #1e293b;
+}
+
+.smc-pulse.active {
+  background:  #7c3aed;
+  box-shadow:  0 0 0 0 rgba(124, 58, 237, 0.6);
+  animation:   smc-pulse-anim 2s ease-in-out infinite;
+}
+@keyframes smc-pulse-anim {
+  0%   { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.7); }
+  70%  { box-shadow: 0 0 0 7px rgba(124, 58, 237, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0); }
+}
 </style>

@@ -5,9 +5,9 @@
         <q-btn flat dense round icon="menu" @click="drawer = !drawer" />
         <q-toolbar-title>Deriv Data Dashboard</q-toolbar-title>
 
-        <!-- ════════════════════════════════════════════════════════════════ -->
-        <!-- ── CAMPANITA DE NOTIFICACIONES, SONIDO Y VOZ ALTO VOLUMEN ────── -->
-        <!-- ════════════════════════════════════════════════════════════════ -->
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <!-- â”€â”€ CAMPANITA DE NOTIFICACIONES, SONIDO Y VOZ ALTO VOLUMEN â”€â”€â”€â”€â”€â”€ -->
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
         <q-btn
           flat
           round
@@ -17,7 +17,7 @@
           class="q-mr-sm"
           :class="alertsStore.unreadCount > 0 ? 'alert-bell-pulse' : ''"
         >
-          <!-- Badge numérico de confirmaciones no leídas -->
+          <!-- Badge numÃ©rico de confirmaciones no leÃ­das -->
           <q-badge
             v-if="alertsStore.unreadCount > 0"
             color="red-7"
@@ -27,20 +27,20 @@
           >
             {{ alertsStore.unreadCount }}
           </q-badge>
-          <q-tooltip>Señales y Confirmaciones en Vivo (Sonido y Voz)</q-tooltip>
+          <q-tooltip>SeÃ±ales y Confirmaciones en Vivo (Sonido y Voz)</q-tooltip>
 
-          <!-- Menú desplegable al dar clic -->
+          <!-- MenÃº desplegable al dar clic -->
           <q-menu
             anchor="bottom right"
             self="top right"
             :offset="[0, 10]"
             class="alerts-menu-dropdown shadow-12"
           >
-            <!-- 1. Encabezado del Menú -->
+            <!-- 1. Encabezado del MenÃº -->
             <div class="row items-center justify-between q-pa-sm bg-slate-900 text-white border-b-slate">
               <div class="row items-center q-gutter-xs">
                 <q-icon name="notifications_active" color="amber-4" size="20px" />
-                <span class="text-subtitle2 text-weight-bolder">Centro de Señales y Alertas</span>
+                <span class="text-subtitle2 text-weight-bolder">Centro de SeÃ±ales y Alertas</span>
               </div>
               <q-btn
                 v-if="alertsStore.unreadCount > 0"
@@ -48,13 +48,13 @@
                 dense
                 size="xs"
                 color="amber-3"
-                label="Marcar leídas"
+                label="Marcar leÃ­das"
                 class="text-weight-bold"
                 @click="alertsStore.markAllAsRead"
               />
             </div>
 
-            <!-- 2. Barra de Configuración de Sonido y Voz Alto Volumen -->
+            <!-- 2. Barra de ConfiguraciÃ³n de Sonido y Voz Alto Volumen -->
             <div class="bg-slate-50 q-pa-sm border-b-slate">
               <div class="row items-center justify-between q-mb-xs">
                 <div class="row items-center q-gutter-sm">
@@ -77,7 +77,7 @@
                 </div>
               </div>
 
-              <!-- Botón para probar el sonido y la voz -->
+              <!-- BotÃ³n para probar el sonido y la voz -->
               <q-btn
                 unelevated
                 dense
@@ -85,15 +85,15 @@
                 color="amber-9"
                 text-color="white"
                 icon="record_voice_over"
-                label="🔊 Probar Alerta Sonora y Voz"
+                label="ðŸ”Š Probar Alerta Sonora y Voz"
                 class="full-width text-weight-bolder q-mt-xs"
                 @click="alertsStore.testAudioAlert()"
               >
-                <q-tooltip>Emite la campana y lee la confirmación por voz a alto volumen</q-tooltip>
+                <q-tooltip>Emite la campana y lee la confirmaciÃ³n por voz a alto volumen</q-tooltip>
               </q-btn>
             </div>
 
-            <!-- 3. Lista de Señales y Confirmaciones -->
+            <!-- 3. Lista de SeÃ±ales y Confirmaciones -->
             <div v-if="alertsStore.activeAlerts.length === 0" class="q-pa-lg text-center text-slate-500">
               <div class="radar-dot q-mx-auto q-mb-sm"></div>
               <div class="text-weight-bold text-slate-700">Sin alertas activas en este instante</div>
@@ -138,14 +138,14 @@
 
                   <q-item-section side>
                     <q-btn flat round dense size="sm" icon="open_in_new" color="primary">
-                      <q-tooltip>Abrir en Gráfico</q-tooltip>
+                      <q-tooltip>Abrir en GrÃ¡fico</q-tooltip>
                     </q-btn>
                   </q-item-section>
                 </q-item>
               </q-list>
             </q-scroll-area>
 
-            <!-- 4. Pie de Menú con Accesos Rápidos -->
+            <!-- 4. Pie de MenÃº con Accesos RÃ¡pidos -->
             <div class="row items-center justify-between q-pa-sm bg-slate-100 border-t-slate">
               <div class="row items-center q-gutter-xs">
                 <q-btn
@@ -180,13 +180,13 @@
           </q-menu>
         </q-btn>
 
-        <!-- Datos del Usuario, Configuración y Logout -->
+        <!-- Datos del Usuario, ConfiguraciÃ³n y Logout -->
         <q-btn flat dense round icon="tune" color="amber-4" class="q-mr-sm" @click="openPrefsDialog">
           <q-tooltip>Parametrizar mis estrategias</q-tooltip>
         </q-btn>
         <div class="text-caption q-mr-md font-mono">{{ authStore.user?.email }}</div>
         <q-btn flat dense round icon="logout" @click="onLogout">
-          <q-tooltip>Cerrar sesión</q-tooltip>
+          <q-tooltip>Cerrar sesiÃ³n</q-tooltip>
         </q-btn>
       </q-toolbar>
     </q-header>
@@ -198,12 +198,12 @@
           <q-item-section>Dashboard</q-item-section>
         </q-item>
 
-        <q-item clickable to="/crash-ia">
+        <q-item clickable to="/ea-wey-smc">
           <q-item-section avatar><q-icon name="insights" color="purple-7" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
-              <span>Estrategia Crash &amp; Boom IA</span>
-              <q-badge color="purple-7" label="ZONAS" class="text-weight-bold" />
+              <span>EA WEY SMC</span>
+              <q-badge color="purple-7" label="SMC" class="text-weight-bold" />
             </div>
           </q-item-section>
         </q-item>
@@ -212,7 +212,7 @@
           <q-item-section avatar><q-icon name="bolt" color="amber-5" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
-              <span class="text-weight-bold text-amber-3">Patrones Spike IA · Crash &amp; Boom</span>
+              <span class="text-weight-bold text-amber-3">Patrones Spike IA Â· Crash &amp; Boom</span>
               <q-badge color="amber-8" text-color="black" label="MULTI" class="text-weight-bolder" />
             </div>
           </q-item-section>
@@ -262,24 +262,24 @@
       </q-list>
     </q-drawer>
 
-    <!-- Modal de Parametrización Dinámica de Estrategias -->
+    <!-- Modal de ParametrizaciÃ³n DinÃ¡mica de Estrategias -->
     <q-dialog v-model="showPrefsDialog">
       <q-card style="width: 520px; max-width: 95vw; border-radius: 16px;">
         <q-card-section class="bg-slate-900 text-white q-pa-md">
           <div class="row items-center justify-between">
             <div class="row items-center q-gutter-sm">
               <q-icon name="tune" color="amber-4" size="24px" />
-              <div class="text-h6 text-weight-bold">Parametrización Dinámica</div>
+              <div class="text-h6 text-weight-bold">ParametrizaciÃ³n DinÃ¡mica</div>
             </div>
             <q-btn flat dense round icon="close" color="white" v-close-popup />
           </div>
           <div class="text-caption text-grey-4 q-mt-xs">
-            Selecciona las estrategias que deseas operar y monitorear. Esta selección controla las señales y notificaciones, pero no oculta las opciones del menú.
+            Selecciona las estrategias que deseas operar y monitorear. Esta selecciÃ³n controla las seÃ±ales y notificaciones, pero no oculta las opciones del menÃº.
           </div>
         </q-card-section>
 
         <q-card-section class="q-pa-md">
-          <!-- Botones de Acción Rápida -->
+          <!-- Botones de AcciÃ³n RÃ¡pida -->
           <div class="row q-gutter-xs q-mb-md justify-between">
             <q-btn size="sm" outline color="primary" label="Todas" @click="selectAllPrefs(true)" />
             <q-btn size="sm" outline color="indigo-7" label="Solo H1" @click="selectOnlyOne('h1NoWick')" />
@@ -306,8 +306,8 @@
               <div class="row items-center q-gutter-sm">
                 <q-icon name="insights" color="purple-7" size="24px" />
                 <div>
-                  <div class="text-weight-bold text-slate-800">Estrategia Crash &amp; Boom IA</div>
-                  <div class="text-caption text-grey-6">Zonas V, retroceso al 50% y Order Blocks</div>
+                  <div class="text-weight-bold text-slate-800">EA WEY SMC</div>
+                  <div class="text-caption text-grey-6">SMC: Zonas V, CHoCH, Retest y Spikes</div>
                 </div>
               </div>
               <q-toggle v-model="editPrefs.crashBoomIa" color="purple-7" />
@@ -318,7 +318,7 @@
                 <q-icon name="bolt" color="amber-7" size="24px" />
                 <div>
                   <div class="text-weight-bold text-slate-800">Patrones Spike IA</div>
-                  <div class="text-caption text-grey-6">Detección de patrones rápidos de spike en Crash y Boom</div>
+                  <div class="text-caption text-grey-6">DetecciÃ³n de patrones rÃ¡pidos de spike en Crash y Boom</div>
                 </div>
               </div>
               <q-toggle v-model="editPrefs.spikePatterns" color="amber-7" />
@@ -328,8 +328,8 @@
               <div class="row items-center q-gutter-sm">
                 <q-icon name="star" color="cyan-7" size="24px" />
                 <div>
-                  <div class="text-weight-bold text-slate-800">Señales Wey (>= 4★)</div>
-                  <div class="text-caption text-grey-6">Oportunidades de alta probabilidad del radar de señales</div>
+                  <div class="text-weight-bold text-slate-800">SeÃ±ales Wey (>= 4â˜…)</div>
+                  <div class="text-caption text-grey-6">Oportunidades de alta probabilidad del radar de seÃ±ales</div>
                 </div>
               </div>
               <q-toggle v-model="editPrefs.weySignals" color="cyan-7" />
@@ -341,7 +341,7 @@
 
         <q-card-actions align="right" class="q-pa-md">
           <q-btn flat label="Cancelar" color="grey-7" v-close-popup />
-          <q-btn color="primary" icon="save" label="Guardar Configuración" :loading="savingPrefs" @click="savePreferences" />
+          <q-btn color="primary" icon="save" label="Guardar ConfiguraciÃ³n" :loading="savingPrefs" @click="savePreferences" />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -368,7 +368,7 @@ const tradingStore = useTradingStore();
 const router = useRouter();
 const route = useRoute();
 
-// ── Parametrización Dinámica de Estrategias ──
+// â”€â”€ ParametrizaciÃ³n DinÃ¡mica de Estrategias â”€â”€
 const showPrefsDialog = ref(false);
 const savingPrefs = ref(false);
 const userPrefs = computed(() => authStore.strategyPreferences);
@@ -441,7 +441,7 @@ async function savePreferences() {
     $q.notify({
       type: 'positive',
       icon: 'check_circle',
-      message: 'Preferencias de estrategias guardadas con éxito.',
+      message: 'Preferencias de estrategias guardadas con Ã©xito.',
       position: 'top',
       timeout: 2500,
     });
@@ -509,7 +509,7 @@ function goToAlert(alert) {
 onMounted(() => {
   if (!authStore.user) authStore.fetchMe().catch(() => {});
 
-  // Iniciar monitoreo continuo en segundo plano de señales, confirmaciones y trades
+  // Iniciar monitoreo continuo en segundo plano de seÃ±ales, confirmaciones y trades
   alertsStore.startMonitoring();
   tradingStore.startPolling();
 

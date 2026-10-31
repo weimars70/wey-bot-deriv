@@ -7,7 +7,7 @@ export class CrashIaStrategyController {
 
   /**
    * GET /api/strategies/crash-ia/evaluate?symbol=CRASH1000&timeframe=5
-   * Devuelve niveles de zonas, estado de filtros y serie de velas para el gráfico.
+   * Devuelve niveles de zonas, estado de filtros y serie de velas para el grÃ¡fico.
    */
   @Get('evaluate')
   async evaluate(
@@ -21,7 +21,7 @@ export class CrashIaStrategyController {
 
   /**
    * GET /api/strategies/crash-ia/summary
-   * Devuelve el estado rápido de todos los índices Crash.
+   * Devuelve el estado rÃ¡pido de todos los Ã­ndices Crash.
    */
   @Get('summary')
   async summary() {
@@ -30,8 +30,8 @@ export class CrashIaStrategyController {
 
   /**
    * GET /api/strategies/crash-ia/spike-radar
-   * Retorna ÚNICAMENTE los índices con condiciones institucionales completas para spike inminente.
-   * Filtro ultra-estricto: canSell|canBuy + OB fresco en zona + V-patrón + M5 viable + velaAmiga + greenOk + trendOk + precio ≤1.5x altura M5 del OB + RSI no sobreextendido.
+   * Retorna ÃšNICAMENTE los Ã­ndices con condiciones institucionales completas para spike inminente.
+   * Filtro ultra-estricto: canSell|canBuy + OB fresco en zona + V-patrÃ³n + M5 viable + velaAmiga + greenOk + trendOk + precio â‰¤1.5x altura M5 del OB + RSI no sobreextendido.
    */
   @Get('spike-radar')
   async spikeRadar() {
@@ -49,7 +49,7 @@ export class CrashIaStrategyController {
     return this.crashIaService.getDoubleWickMechaSummary();
   }
 
-  /** H1 solo alerta: nunca es consumido por el bot de ejecución automática. */
+  /** H1 solo alerta: nunca es consumido por el bot de ejecuciÃ³n automÃ¡tica. */
   @Get('double-wick-h1-summary')
   async doubleWickH1Summary() {
     return this.crashIaService.getDoubleWickH1Summary();
@@ -57,8 +57,8 @@ export class CrashIaStrategyController {
 
   /**
    * GET /api/strategies/crash-ia/double-wick-history?symbol=BOOM500&days=7
-   * Escanea las últimas N velas M5 históricas, detecta cada ocurrencia del patrón
-   * de dos velas y verifica si en las siguientes 6 velas apareció un spike.
+   * Escanea las Ãºltimas N velas M5 histÃ³ricas, detecta cada ocurrencia del patrÃ³n
+   * de dos velas y verifica si en las siguientes 6 velas apareciÃ³ un spike.
    */
   @Get('double-wick-history')
   async doubleWickHistory(

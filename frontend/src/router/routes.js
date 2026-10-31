@@ -27,6 +27,7 @@ const routes = [
       { path: 'double-wick-strategy', name: 'double-wick-strategy', component: () => import('pages/DoubleWickStrategyPage.vue') },
       { path: 'm5plus-strategy', name: 'm5plus-strategy', component: () => import('pages/M5PlusStrategyPage.vue') },
       { path: 'm5x-strategy', name: 'm5x-strategy', component: () => import('pages/M5XStrategyPage.vue') },
+      { path: 'ea-wey-smc', name: 'ea-wey-smc', component: () => import('pages/EaWeySMCPage.vue') },
       { path: 'h1-strategy', name: 'h1-strategy', component: () => import('pages/H1StrategyPage.vue') },
       { path: 'comparison', name: 'comparison', component: () => import('pages/ComparisonPage.vue') },
       { path: 'ticks', name: 'ticks', component: () => import('pages/TicksPage.vue') },

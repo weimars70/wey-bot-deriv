@@ -14,6 +14,7 @@ import { SignalsModule } from './signals/signals.module';
 import { ApexSignalsModule } from './apex-signals/apex-signals.module';
 import { H1StrategyModule } from './strategies/h1-strategy.module';
 import { CrashIaStrategyModule } from './strategies/crash-ia-strategy.module';
+import { EaWeySMCModule } from './strategies/ea-wey-smc.module';
 import { CrashSpikeStrategyModule } from './strategies/crash-spike-strategy.module';
 import { M5PlusStrategyModule } from './strategies/m5plus-strategy.module';
 import { M5XStrategyModule } from './strategies/m5x-strategy.module';
@@ -45,6 +46,7 @@ import { WatchedLevelsModule } from './watched-levels/watched-levels.module';
     ApexSignalsModule,
     H1StrategyModule,
     CrashIaStrategyModule,
+    EaWeySMCModule,
     CrashSpikeStrategyModule,
     M5PlusStrategyModule,
     M5XStrategyModule,

@@ -12,7 +12,7 @@
           <div>
             <div class="row items-center q-gutter-xs">
               <h1 class="text-h5 text-weight-bolder text-slate-900 q-my-none">
-                Estrategia Crash &amp; Boom IA · Zonas V y H1
+                EA WEY SMC · Zonas V, CHoCH y Spikes
               </h1>
               <q-badge
                 :color="isBoom ? 'emerald-1' : 'indigo-1'"
