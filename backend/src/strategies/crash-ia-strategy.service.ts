@@ -535,12 +535,13 @@ export class CrashIaStrategyService {
   }
 
   /**
-   * Resumen rápido de todos los índices Crash y Boom.
+   * Resumen rápido de todos los índices Crash y Boom (secuencial para no abrir múltiples conexiones en BD).
    */
   async getSummaryAll(): Promise<Omit<CrashIaEvaluation, 'chartCandles'>[]> {
-    const list = await Promise.all(
-      CRASH_BOOM_IA_SYMBOLS.map((s) => this.evaluateSymbol(s.symbol, 5)),
-    );
+    const list: CrashIaEvaluation[] = [];
+    for (const s of CRASH_BOOM_IA_SYMBOLS) {
+      list.push(await this.evaluateSymbol(s.symbol, 5));
+    }
     return list.map(({ chartCandles, ...rest }) => rest);
   }
 
@@ -747,9 +748,10 @@ export class CrashIaStrategyService {
     autoTrade: boolean;
     patternEpoch: number;
   }>> {
-    const results = await Promise.all(
-      CRASH_BOOM_IA_SYMBOLS.map((s) => this.evaluateDoubleWickMecha(s.symbol)),
-    );
+    const results: Array<Awaited<ReturnType<CrashIaStrategyService['evaluateDoubleWickMecha']>>> = [];
+    for (const s of CRASH_BOOM_IA_SYMBOLS) {
+      results.push(await this.evaluateDoubleWickMecha(s.symbol));
+    }
     return results
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
       .map((item) => ({
@@ -769,9 +771,10 @@ export class CrashIaStrategyService {
   }
 
   async getDoubleWickH1Summary() {
-    const results = await Promise.all(
-      CRASH_BOOM_IA_SYMBOLS.map((s) => this.evaluateDoubleWickMecha(s.symbol, 3600)),
-    );
+    const results: Array<Awaited<ReturnType<CrashIaStrategyService['evaluateDoubleWickMecha']>>> = [];
+    for (const s of CRASH_BOOM_IA_SYMBOLS) {
+      results.push(await this.evaluateDoubleWickMecha(s.symbol, 3600));
+    }
     return results
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
       .map((item) => ({

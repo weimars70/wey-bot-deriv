@@ -178,20 +178,18 @@ export class WeySignalsService {
   private async doComputeAndCompare(): Promise<WeyComparisonResult> {
     const computedAt = new Date().toISOString();
 
-    // ── 1. Calcular señales locales Wey ──────────────────────────────────────
+    // ── 1. Calcular señales locales Wey en lotes pequeños (evita picos de conexiones en PostgreSQL) ──
     const weyMap = new Map<string, WeySignal>();
 
-    await Promise.allSettled(
-      CRASH_BOOM_KNOWN_SYMBOLS.map(async (symbol) => {
-        try {
-          const result: SignalResult = await this.signalsSvc.getSignal(symbol, 300);
-          const weySignal = this.toWeySignal(result, computedAt);
-          weyMap.set(symbol.toUpperCase(), weySignal);
-        } catch (err: any) {
-          this.logger.warn(`Error calculando señal Wey para ${symbol}: ${err?.message ?? err}`);
-        }
-      }),
-    );
+    for (const symbol of CRASH_BOOM_KNOWN_SYMBOLS) {
+      try {
+        const result: SignalResult = await this.signalsSvc.getSignal(symbol, 300);
+        const weySignal = this.toWeySignal(result, computedAt);
+        weyMap.set(symbol.toUpperCase(), weySignal);
+      } catch (err: any) {
+        this.logger.warn(`Error calculando señal Wey para ${symbol}: ${err?.message ?? err}`);
+      }
+    }
 
     // ── 2. Obtener señales de referencia de Apex ─────────────────────────────
     const { signals: apexSignals } = this.apexSvc.getSignals();

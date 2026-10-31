@@ -830,25 +830,24 @@ export class SignalsService implements OnModuleInit {
     let mtfH1Raw: { open: number; high: number; low: number; close: number; epoch: number }[] = [];
     let mtfH4Raw: { open: number; high: number; low: number; close: number; epoch: number }[] = [];
 
-    const mtfResults = await Promise.all(
-      MTF_GRANULARITIES.map(async (g) => {
-        const historyLimit = Math.ceil((HISTORY_DAYS * 86400) / g) + 2;
-        const mtfRaw = g === granularity
-          ? raw
-          : await this.candlesService.findLatest(symbol, g, historyLimit);
-        this.scheduleHistoryBackfill(symbol, g, mtfRaw, historyLimit);
-        if (g === 900) {
-          mtf15Raw = mtfRaw;
-        } else if (g === 3600) {
-          mtfH1Raw = mtfRaw;
-        } else if (g === 14400) {
-          mtfH4Raw = mtfRaw;
-        }
-        const label = MTF_LABELS[g] ?? `${g}s`;
-        const context = analyzeTimeframeHistory(mtfRaw, base.symbolClass, base.entry);
-        return { label, context };
-      }),
-    );
+    const mtfResults: { label: string; context: TimeframeHistoryContext }[] = [];
+    for (const g of MTF_GRANULARITIES) {
+      const historyLimit = Math.min(300, Math.ceil((HISTORY_DAYS * 86400) / g) + 2);
+      const mtfRaw = g === granularity
+        ? raw
+        : await this.candlesService.findLatest(symbol, g, historyLimit);
+      this.scheduleHistoryBackfill(symbol, g, mtfRaw, historyLimit);
+      if (g === 900) {
+        mtf15Raw = mtfRaw;
+      } else if (g === 3600) {
+        mtfH1Raw = mtfRaw;
+      } else if (g === 14400) {
+        mtfH4Raw = mtfRaw;
+      }
+      const label = MTF_LABELS[g] ?? `${g}s`;
+      const context = analyzeTimeframeHistory(mtfRaw, base.symbolClass, base.entry);
+      mtfResults.push({ label, context });
+    }
 
     const alignmentDetail: Record<string, SignalDirection> = {};
     const historyContext: Record<string, TimeframeHistoryContext> = {};
@@ -1119,8 +1118,12 @@ export class SignalsService implements OnModuleInit {
 
     this.logger.debug(`getAllSignals: ${sorted.length} unique crash/boom symbols → ${sorted.map(([s, g]) => `${s}@${g}s`).join(', ')}`);
 
-    // ── Step 3: compute one signal per symbol ────────────────────────────────
-    return Promise.all(sorted.map(([symbol, granularity]) => this.getSignal(symbol, granularity)));
+    // ── Step 3: compute one signal per symbol sequentially to avoid DB connection spikes ──
+    const results: SignalResult[] = [];
+    for (const [symbol, granularity] of sorted) {
+      results.push(await this.getSignal(symbol, granularity));
+    }
+    return results;
   }
 
   /**

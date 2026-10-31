@@ -22,9 +22,13 @@ export default registerAs(
     synchronize: false,
     logging: false,
     extra: {
-      max: 30,
-      connectionTimeoutMillis: 25000,
-      idleTimeoutMillis: 30000,
+      max: parseInt(process.env.DB_POOL_MAX || '8', 10),
+      min: 1,
+      connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: 10000,
+      allowExitOnIdle: true,
+      keepAlive: true,
+      options: '-c idle_session_timeout=90000 -c idle_in_transaction_session_timeout=30000',
     },
   }),
 );

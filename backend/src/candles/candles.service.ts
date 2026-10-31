@@ -16,14 +16,16 @@ export class CandlesService {
   private readonly ohlcBuffer = new Map<string, any>();
   private flushTimer: NodeJS.Timeout | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
-
   private macroSyncTimer: NodeJS.Timeout | null = null;
+  private macroSyncInFlight = false;
+  private readonly readCache = new Map<string, { expiresAt: number; data: Candle[] }>();
+  private readonly liveSynLastAt = new Map<string, number>();
 
   onModuleInit() {
     this.flushTimer = setInterval(() => this.flushOhlcBuffer(), 2000);
-    // Sincronización continua de velas macro (M15, M30, H1, H4) a partir de las velas M1 en vivo
-    this.macroSyncTimer = setInterval(() => this.syncAllMacroCandlesFromM1(), 30000);
-    setTimeout(() => this.syncAllMacroCandlesFromM1(), 5000);
+    // Sincronización continua de velas macro (M15, M30, H1, H4) cada 60s sin solaparse
+    this.macroSyncTimer = setInterval(() => this.syncAllMacroCandlesFromM1(), 60000);
+    setTimeout(() => this.syncAllMacroCandlesFromM1(), 8000);
   }
 
   onModuleDestroy() {
@@ -104,6 +106,8 @@ export class CandlesService {
    * a partir del flujo continuo de velas M1 en la base de datos.
    */
   async syncAllMacroCandlesFromM1(): Promise<void> {
+    if (this.macroSyncInFlight) return;
+    this.macroSyncInFlight = true;
     try {
       const nowEpoch = Math.floor(Date.now() / 1000);
       const activeSymbolsRows: { symbol: string }[] = await this.candlesRepo.query(
@@ -121,20 +125,17 @@ export class CandlesService {
       }
     } catch (e: any) {
       this.logger.error(`Error en sincronización macro periódica: ${e?.message || e}`);
+    } finally {
+      this.macroSyncInFlight = false;
     }
   }
 
   async syncMacroCandlesForSymbol(symbol: string, granularity: number): Promise<void> {
     try {
       const nowEpoch = Math.floor(Date.now() / 1000);
-      const maxRes = await this.candlesRepo.query(
-        'SELECT max(epoch) as max_epoch FROM candles WHERE symbol = $1 AND granularity = $2',
-        [symbol, granularity],
-      );
-      const maxEpoch = Number(maxRes[0]?.max_epoch);
-      if (maxEpoch && maxEpoch >= nowEpoch - 60) return;
-
-      const fromEpoch = maxEpoch ? maxEpoch : nowEpoch - 172800;
+      const currentBucket = Math.floor(nowEpoch / granularity) * granularity;
+      // Solo sintetizamos las últimas 2 velas macro (bucket anterior y bucket actual) para no saturar PostgreSQL
+      const fromEpoch = currentBucket - granularity;
       const synCandles = await this.synthesizeFromM1(symbol, granularity, fromEpoch);
       if (synCandles.length > 0) {
         await this.enqueueUpsert(synCandles, `sync macro ${symbol}@${granularity}s`);
@@ -175,35 +176,52 @@ export class CandlesService {
   }
 
   async findLatest(symbol: string, granularity = 60, limit = 200): Promise<Candle[]> {
+    // Limitar máximo de filas por consulta para evitar lecturas masivas que retienen conexiones
+    const safeLimit = Math.min(limit, 600);
+    const cacheKey = `${symbol}:${granularity}:${safeLimit}`;
+    const cached = this.readCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+
     const candles = await this.candlesRepo.find({
       where: { symbol, granularity },
       order: { epoch: 'DESC' },
-      take: limit,
+      take: safeLimit,
     });
 
     if (granularity <= 60 || candles.length === 0) {
+      this.readCache.set(cacheKey, { expiresAt: Date.now() + 3000, data: candles });
       return candles;
     }
 
     const newestEpoch = Number(candles[0].epoch);
     const nowEpoch = Math.floor(Date.now() / 1000);
     const currentBucket = Math.floor(nowEpoch / granularity) * granularity;
-    if (newestEpoch < currentBucket) {
+    const synKey = `${symbol}:${granularity}`;
+    const lastSynMs = this.liveSynLastAt.get(synKey) || 0;
+
+    // Solo sintetizar en lectura si el bucket actual falta Y no se ha sintetizado en los últimos 30 segundos
+    if (newestEpoch < currentBucket && Date.now() - lastSynMs > 30_000) {
+      this.liveSynLastAt.set(synKey, Date.now());
       try {
-        const syn = await this.synthesizeFromM1(symbol, granularity, newestEpoch);
+        const syn = await this.synthesizeFromM1(symbol, granularity, Math.max(newestEpoch, currentBucket - granularity));
         if (syn.length > 0) {
           this.enqueueUpsert(syn, `live syn ${symbol}@${granularity}s`).catch(() => {});
           const map = new Map<number, any>();
           for (const c of candles) map.set(Number(c.epoch), c);
           for (const sc of syn) map.set(Number(sc.epoch), sc);
           const merged = Array.from(map.values()).sort((a, b) => Number(b.epoch) - Number(a.epoch));
-          return merged.slice(0, limit) as Candle[];
+          const result = merged.slice(0, safeLimit) as Candle[];
+          this.readCache.set(cacheKey, { expiresAt: Date.now() + 3000, data: result });
+          return result;
         }
       } catch (e: any) {
         this.logger.warn(`Error en merge en vivo ${symbol}@${granularity}s: ${e?.message || e}`);
       }
     }
 
+    this.readCache.set(cacheKey, { expiresAt: Date.now() + 3000, data: candles });
     return candles;
   }
 
