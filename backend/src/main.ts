@@ -148,24 +148,20 @@ async function bootstrap() {
     console.warn('⚠️ No se encontró la carpeta de la SPA Quasar en las rutas habituales.');
   }
 
-  try {
-    const httpServer = app.getHttpServer();
-    const originalListeners = httpServer.listeners('upgrade').slice(0);
-    httpServer.removeAllListeners('upgrade');
-    httpServer.on('upgrade', (req: any, socket: any, head: any) => {
-      if (req.url && req.url.startsWith('/bot/socket.io')) {
-        req.url = req.url.replace(/^\/bot/, '');
-      }
-      for (const listener of originalListeners) {
-        listener.call(httpServer, req, socket, head);
-      }
-    });
-  } catch (err: any) {
-    // eslint-disable-next-line no-console
-    console.warn('⚠️ No se pudo configurar listener de upgrade:', err?.message);
-  }
+  // ── Reescritura de URL WebSocket upgrade ANTES de listen ────────────────
+  // Nginx ya reescribe /bot/socket.io → /socket.io en proxy_pass,
+  // pero si el cliente conecta directamente (móvil / Capacitor) con path
+  // /bot/socket.io, el backend debe reescribir el upgrade URL antes de que
+  // el adapter de Socket.io lo procese. Registramos el listener ANTES de
+  // app.listen() para que quede al inicio de la cadena de upgrade listeners.
+  const httpServer = app.getHttpServer();
+  httpServer.prependListener('upgrade', (req: any, _socket: any, _head: any) => {
+    if (req.url && req.url.startsWith('/bot/socket.io')) {
+      req.url = req.url.replace(/^\/bot/, '');
+    }
+  });
 
-  const port = Number(process.env.PORT) || 3038;
+  const port = Number(process.env.PORT) || 3039;
   let retries = 5;
   while (retries > 0) {
     try {
