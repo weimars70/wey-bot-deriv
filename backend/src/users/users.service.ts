@@ -6,16 +6,57 @@ import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UsersService {
+  private readonly userCacheTtlMs = 15_000;
+  private readonly userByIdCache = new Map<string, { expiresAt: number; user: User | null }>();
+  private readonly userByEmailCache = new Map<string, { expiresAt: number; user: User | null }>();
+
   constructor(
     @InjectRepository(User) private readonly usersRepo: Repository<User>,
   ) {}
 
-  findByEmail(email: string) {
-    return this.usersRepo.findOne({ where: { email } });
+  private cacheUser(user: User | null, idHint?: string, emailHint?: string) {
+    const expiresAt = Date.now() + this.userCacheTtlMs;
+    if (user) {
+      this.userByIdCache.set(user.id, { expiresAt, user });
+      if (user.email) {
+        this.userByEmailCache.set(user.email.toLowerCase(), { expiresAt, user });
+      }
+    } else {
+      if (idHint) this.userByIdCache.set(idHint, { expiresAt, user: null });
+      if (emailHint) this.userByEmailCache.set(emailHint.toLowerCase(), { expiresAt, user: null });
+    }
   }
 
-  findById(id: string) {
-    return this.usersRepo.findOne({ where: { id } });
+  private invalidateUserCache(userId?: string, email?: string) {
+    if (userId) {
+      const cached = this.userByIdCache.get(userId)?.user;
+      if (cached?.email) this.userByEmailCache.delete(cached.email.toLowerCase());
+      this.userByIdCache.delete(userId);
+    }
+    if (email) {
+      this.userByEmailCache.delete(email.toLowerCase());
+    }
+  }
+
+  async findByEmail(email: string) {
+    const key = (email || '').trim().toLowerCase();
+    const cached = this.userByEmailCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.user;
+    }
+    const user = await this.usersRepo.findOne({ where: { email } });
+    this.cacheUser(user, undefined, key);
+    return user;
+  }
+
+  async findById(id: string) {
+    const cached = this.userByIdCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.user;
+    }
+    const user = await this.usersRepo.findOne({ where: { id } });
+    this.cacheUser(user, id);
+    return user;
   }
 
   async findAllPublic() {
@@ -83,10 +124,19 @@ export class UsersService {
   }
 
   async setActiveSession(userId: string, sessionId: string) {
+    const now = new Date();
     await this.usersRepo.update(userId, {
       activeSessionId: sessionId,
-      lastActiveAt: new Date(),
+      lastActiveAt: now,
     });
+    const cached = this.userByIdCache.get(userId)?.user;
+    if (cached) {
+      cached.activeSessionId = sessionId;
+      cached.lastActiveAt = now;
+      this.cacheUser(cached);
+    } else {
+      this.invalidateUserCache(userId);
+    }
   }
 
   async clearActiveSession(userId: string) {
@@ -94,12 +144,19 @@ export class UsersService {
       activeSessionId: null,
       lastActiveAt: null,
     });
+    this.invalidateUserCache(userId);
   }
 
   async updateHeartbeat(userId: string) {
+    const now = new Date();
     await this.usersRepo.update(userId, {
-      lastActiveAt: new Date(),
+      lastActiveAt: now,
     });
+    const cached = this.userByIdCache.get(userId)?.user;
+    if (cached) {
+      cached.lastActiveAt = now;
+      this.cacheUser(cached);
+    }
   }
 
   async updatePhone(
@@ -111,6 +168,7 @@ export class UsersService {
       countryCallingCode,
       phoneNumber,
     });
+    this.invalidateUserCache(userId);
     return this.findById(userId);
   }
 
@@ -124,6 +182,7 @@ export class UsersService {
       throw new ConflictException('Ya existe una cuenta con ese email');
     }
 
+    const oldEmail = user.email;
     user.name = dto.name.trim();
     user.email = normalizedEmail;
     user.countryCallingCode = dto.countryCallingCode;
@@ -133,6 +192,8 @@ export class UsersService {
     }
 
     const updated = await this.usersRepo.save(user);
+    this.invalidateUserCache(userId, oldEmail);
+    this.cacheUser(updated);
     return this.toPublic(updated);
   }
 
@@ -140,6 +201,7 @@ export class UsersService {
     await this.usersRepo.update(userId, {
       strategyPreferences: preferences,
     });
+    this.invalidateUserCache(userId);
     return { success: true, strategyPreferences: preferences };
   }
 

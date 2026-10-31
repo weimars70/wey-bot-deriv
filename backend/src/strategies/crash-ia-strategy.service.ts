@@ -141,6 +141,7 @@ export class CrashIaStrategyService {
   private readonly evaluationCacheTtlMs = 5 * 1000;
   private readonly evaluationCache = new Map<string, { expiresAt: number; value: CrashIaEvaluation }>();
   private readonly evaluationsInFlight = new Map<string, Promise<CrashIaEvaluation>>();
+  private readonly watchedLevelsCache = new Map<string, { expiresAt: number; rows: WatchedEntryLevel[] }>();
 
   constructor(
     private readonly candlesService: CandlesService,
@@ -192,15 +193,13 @@ export class CrashIaStrategyService {
     const allDefs = [...CRASH_SYMBOLS, ...BOOM_SYMBOLS];
     const mercado = allDefs.find((s) => s.symbol === sym)?.name || sym;
 
-    // 1. Obtener velas H1 (3600), M5 (300), M15 (900) y M1 (60)
+    // 1. Obtener velas H1 (3600), M5 (300), M15 (900) y M1 (60) de forma secuencial para usar 1 sola conexión del pool
     const m5HistoryCount = 288; // ~24 horas de M5
     const m1HistoryCount = 500; // cubre los OB M5 buscados hasta ~6h40 atras
-    const [h1Raw, m5Raw, m15Raw, m1Raw] = await Promise.all([
-      this.candlesService.findLatest(sym, 3600, 100),
-      this.candlesService.findLatest(sym, 300, m5HistoryCount), // ~24 horas de M5
-      this.candlesService.findLatest(sym, 900, 100),
-      this.candlesService.findLatest(sym, 60, m1HistoryCount),  // ultimas ~8h20 de M1
-    ]);
+    const h1Raw = await this.candlesService.findLatest(sym, 3600, 100);
+    const m5Raw = await this.candlesService.findLatest(sym, 300, m5HistoryCount);
+    const m15Raw = await this.candlesService.findLatest(sym, 900, 100);
+    const m1Raw = await this.candlesService.findLatest(sym, 60, m1HistoryCount);
 
     const h1Candles = [...h1Raw].sort((a, b) => Number(a.epoch) - Number(b.epoch));
     const m5Candles = [...m5Raw].sort((a, b) => Number(a.epoch) - Number(b.epoch));
@@ -450,14 +449,24 @@ export class CrashIaStrategyService {
     let gaps: CrashIaGapLevel[] = [];
     try {
       const cleanSym = sym.replace(/[^A-Z0-9]/g, '');
-      const rawGaps = await this.watchedLevelsRepo
-        .createQueryBuilder('lvl')
-        .where('lvl.status IN (:...statuses)', { statuses: ['PENDING', 'EVALUATING'] })
-        .andWhere(
-          "(REPLACE(UPPER(lvl.symbol), ' ', '') = :cleanSym OR :cleanSym LIKE CONCAT('%', REPLACE(UPPER(lvl.symbol), ' ', ''), '%'))",
-          { cleanSym }
-        )
-        .getMany();
+      const cachedGaps = this.watchedLevelsCache.get(cleanSym);
+      let rawGaps: WatchedEntryLevel[];
+      if (cachedGaps && cachedGaps.expiresAt > Date.now()) {
+        rawGaps = cachedGaps.rows;
+      } else {
+        rawGaps = await this.watchedLevelsRepo
+          .createQueryBuilder('lvl')
+          .where('lvl.status IN (:...statuses)', { statuses: ['PENDING', 'EVALUATING'] })
+          .andWhere(
+            "(REPLACE(UPPER(lvl.symbol), ' ', '') = :cleanSym OR :cleanSym LIKE CONCAT('%', REPLACE(UPPER(lvl.symbol), ' ', ''), '%'))",
+            { cleanSym }
+          )
+          .getMany();
+        this.watchedLevelsCache.set(cleanSym, {
+          expiresAt: Date.now() + 15_000,
+          rows: rawGaps,
+        });
+      }
 
       const drift = SYMBOL_DRIFT_PER_MIN[cleanSym] || 0.55;
       gaps = rawGaps
