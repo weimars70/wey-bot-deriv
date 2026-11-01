@@ -208,6 +208,16 @@
           </q-item-section>
         </q-item>
 
+        <q-item clickable to="/smc-synthetics">
+          <q-item-section avatar><q-icon name="auto_graph" color="indigo-7" /></q-item-section>
+          <q-item-section>
+            <div class="row items-center justify-between">
+              <span>SMC Sintéticos</span>
+              <q-badge color="indigo-7" label="STEP · VOL · JUMP" class="text-weight-bold" />
+            </div>
+          </q-item-section>
+        </q-item>
+
         <q-item clickable to="/spike-strategy">
           <q-item-section avatar><q-icon name="bolt" color="amber-5" /></q-item-section>
           <q-item-section>

@@ -78,14 +78,12 @@
 
     <!-- SPIKE RADAR: VISTA EN VIVO -->
     <template v-if="activeRadarTab === 'active'">
-      <!-- Radar loading skeletons -->
       <div v-if="radarLoading && !spikeRadarList.length" class="row q-col-gutter-md q-mb-xl">
         <div v-for="i in 3" :key="i" class="col-12 col-sm-6 col-lg-4">
           <q-skeleton type="rect" height="140px" style="border-radius:12px;" />
         </div>
       </div>
 
-      <!-- Radar vacío -->
       <div
         v-else-if="!radarLoading && !spikeRadarList.length"
         class="radar-empty q-pa-lg text-center q-mb-xl"
@@ -99,7 +97,6 @@
         </div>
       </div>
 
-      <!-- Radar Cards En Vivo -->
       <div v-else class="row q-col-gutter-md q-mb-xl">
         <div
           v-for="entry in spikeRadarList"
@@ -286,14 +283,14 @@
 
 
     <!-- ───────────────────────────────────────────────────────────────
-         SECCIÓN 1.5 · EA WEY SMC — Índices listos para operar
+         SECCIÓN 1.5 · EA WEY SMC — Crash & Boom (Listos para Operar)
     ──────────────────────────────────────────────────────────────── -->
     <div class="section-header smc-section-header q-mb-md row items-center justify-between">
       <div class="row items-center q-gutter-sm">
         <span class="live-pulse-dot smc-pulse" :class="{ active: smcReadyList.length > 0 }" />
         <div>
           <div class="smc-title row items-center q-gutter-xs">
-            <span>🤖 EA WEY SMC · Listos para Operar</span>
+            <span>🤖 EA WEY SMC · Crash &amp; Boom</span>
             <span class="smc-tag">AUTO</span>
             <q-badge
               v-if="smcReadyList.length"
@@ -303,7 +300,7 @@
             />
           </div>
           <div class="section-sub">
-            Scanner automático de condiciones SMC: sesgo HTF H1 · zona activa · pullback · CHoCH · descuento/premium
+            Scanner automático de condiciones SMC para Crash y Boom: sesgo HTF H1 · zona activa · pullback · CHoCH · descuento/premium
             <span v-if="lastSmcUpdate" class="q-ml-xs">
               · actualizado {{ lastSmcUpdateTime }}
             </span>
@@ -360,28 +357,25 @@
 
     <!-- EA WEY SMC: VISTA EN VIVO -->
     <template v-if="activeSmcTab === 'active'">
-      <!-- SMC loading skeletons -->
       <div v-if="smcLoading && !smcAllResults.length" class="row q-col-gutter-md q-mb-xl">
         <div v-for="i in 3" :key="i" class="col-12 col-sm-6 col-lg-4">
           <q-skeleton type="rect" height="120px" style="border-radius:12px;" />
         </div>
       </div>
 
-      <!-- Sin índices listos -->
       <div
         v-else-if="!smcLoading && !smcReadyList.length"
         class="radar-empty q-pa-lg text-center q-mb-xl"
       >
         <q-icon name="hourglass_empty" size="36px" color="grey-5" />
         <div class="text-subtitle2 text-weight-bold text-slate-500 q-mt-sm">
-          Sin índices listos para el EA en este momento
+          Sin índices Crash/Boom listos para el EA en este momento
         </div>
         <div class="text-caption text-slate-400 q-mt-xs">
           Los 10 índices están siendo evaluados. Se mostrará cuando alguno cumpla todas las condiciones SMC.
         </div>
       </div>
 
-      <!-- Cards compactas de índices listos -->
       <div v-else class="row q-col-gutter-md q-mb-xl">
         <div
           v-for="item in smcReadyList"
@@ -429,7 +423,7 @@
       <div v-if="!smcHistoryList.length" class="radar-empty q-pa-xl text-center q-mb-xl">
         <q-icon name="history_toggle_drop_down" size="44px" color="purple-4" />
         <div class="text-subtitle1 text-weight-bold text-slate-700 q-mt-sm">
-          Sin señales SMC acumuladas en las últimas 24 horas
+          Sin señales SMC Crash/Boom acumuladas en las últimas 24 horas
         </div>
         <div class="text-caption text-slate-500 q-mt-xs">
           Cada vez que el scanner SMC detecte un índice con condiciones completas o score institucional alto, se archivará automáticamente aquí por 24h.
@@ -489,6 +483,241 @@
                     color="purple-8"
                     icon="candlestick_chart"
                     :to="`/ea-wey-smc?symbol=${item.symbol}`"
+                    label="Ver gráfico"
+                  />
+                </div>
+              </q-card-section>
+            </q-card>
+          </div>
+        </div>
+      </div>
+    </template>
+
+
+    <!-- ───────────────────────────────────────────────────────────────
+         SECCIÓN 1.8 · SMC SINTÉTICOS — Step Index, Volatility & Jump
+         Estrategia SMC pura sin spikes · Compras y Ventas bidireccionales
+    ──────────────────────────────────────────────────────────────── -->
+    <div class="section-header synth-section-header q-mb-md row items-center justify-between">
+      <div class="row items-center q-gutter-sm">
+        <span class="live-pulse-dot synth-pulse" :class="{ active: synthReadyList.length > 0 }" />
+        <div>
+          <div class="synth-title row items-center q-gutter-xs">
+            <span>⚡ SMC Sintéticos · Step Index, Volatility &amp; Jump</span>
+            <span class="synth-tag">BUY &amp; SELL</span>
+            <q-badge
+              v-if="synthReadyList.length"
+              color="indigo-8"
+              :label="`${synthReadyList.length} LISTOS`"
+              class="q-ml-xs"
+            />
+          </div>
+          <div class="section-sub">
+            Estrategia SMC institucional pura sin spikes: tendencia HTF H1 · Order Blocks/FVG · Descuento/Premium · CHoCH M5 · Ratio R:B ≥ 1:2.5
+            <span v-if="lastSynthUpdate" class="q-ml-xs">
+              · actualizado {{ lastSynthUpdateTime }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="row items-center q-gutter-sm">
+        <q-btn
+          unelevated
+          color="indigo-7"
+          icon="refresh"
+          label="Actualizar"
+          dense
+          class="q-px-sm"
+          :loading="synthLoading"
+          @click="loadSynthScanner"
+        />
+        <q-btn
+          flat
+          dense
+          color="indigo-7"
+          icon="open_in_new"
+          label="VER SCANNER COMPLETO"
+          to="/smc-synthetics"
+        >
+          <q-tooltip>Abrir scanner y gráficos de los 16 índices sintéticos</q-tooltip>
+        </q-btn>
+      </div>
+    </div>
+
+    <!-- Tabs SMC Sintéticos (En Vivo / Historial 24h) -->
+    <div class="row items-center justify-between q-mb-md">
+      <q-tabs
+        v-model="activeSynthTab"
+        dense
+        no-caps
+        active-color="indigo-7"
+        indicator-color="indigo-7"
+        class="text-slate-600 bg-white shadow-1 rounded-borders"
+        style="border: 1px solid #c7d2fe; border-radius: 8px;"
+      >
+        <q-tab name="active" label="⚡ Índices Listos / En Vivo">
+          <q-badge color="indigo-7" :label="synthReadyList.length" class="q-ml-xs text-weight-bold" />
+        </q-tab>
+        <q-tab name="history" label="🕒 Historial 24 Horas">
+          <q-badge color="indigo-9" :label="synthHistoryList.length" class="q-ml-xs text-weight-bold" />
+        </q-tab>
+      </q-tabs>
+
+      <span v-if="activeSynthTab === 'history'" class="text-caption text-slate-500">
+        Señales de compra y venta detectadas en índices sintéticos en las últimas 24h, ordenadas por tiempo.
+      </span>
+    </div>
+
+    <!-- SMC SINTÉTICOS: VISTA EN VIVO -->
+    <template v-if="activeSynthTab === 'active'">
+      <div v-if="synthLoading && !synthAllResults.length" class="row q-col-gutter-md q-mb-xl">
+        <div v-for="i in 3" :key="i" class="col-12 col-sm-6 col-lg-4">
+          <q-skeleton type="rect" height="135px" style="border-radius:12px;" />
+        </div>
+      </div>
+
+      <div
+        v-else-if="!synthLoading && !synthReadyList.length"
+        class="radar-empty q-pa-lg text-center q-mb-xl"
+      >
+        <q-icon name="auto_graph" size="36px" color="indigo-4" />
+        <div class="text-subtitle2 text-weight-bold text-slate-500 q-mt-sm">
+          Sin índices sintéticos listos en este momento
+        </div>
+        <div class="text-caption text-slate-400 q-mt-xs">
+          Los 16 índices Step, Volatility y Jump están siendo monitoreados continuamente para compras y ventas.
+        </div>
+      </div>
+
+      <div v-else class="row q-col-gutter-md q-mb-xl">
+        <div
+          v-for="item in synthReadyList"
+          :key="item.symbol"
+          class="col-12 col-sm-6 col-lg-4"
+        >
+          <q-card
+            class="synth-compact-card"
+            :class="item.direction === 'BUY' ? 'synth-compact--buy' : 'synth-compact--sell'"
+            flat
+            bordered
+          >
+            <q-card-section class="q-pa-md">
+              <div class="row items-center justify-between q-mb-xs">
+                <div class="row items-center q-gutter-xs">
+                  <span style="font-size:16px;">{{ item.direction === 'BUY' ? '📈' : '📉' }}</span>
+                  <span class="smc-compact-symbol">{{ item.name }}</span>
+                  <q-badge
+                    :color="item.direction === 'BUY' ? 'green-8' : 'red-8'"
+                    :label="item.direction"
+                    class="text-weight-bold"
+                  />
+                </div>
+                <div class="row items-center q-gutter-xs">
+                  <span v-for="n in 6" :key="n" style="font-size:10px;" :style="{ color: n <= item.score ? '#f59e0b' : '#cbd5e1' }">★</span>
+                  <q-badge color="green-7" label="LISTO ✓" class="text-weight-bold q-ml-xs" />
+                </div>
+              </div>
+
+              <div class="row q-gutter-xs q-mb-xs">
+                <q-badge
+                  :outline="!item.conditions?.htfBias"
+                  :color="item.conditions?.htfBias ? (item.direction === 'BUY' ? 'green-7' : 'red-7') : 'grey-5'"
+                  :label="`HTF ${item.conditions?.htfBiasLabel ? item.conditions.htfBiasLabel.slice(0,3) : 'H1'}`"
+                  class="text-weight-bold"
+                />
+                <q-badge :outline="!item.conditions?.hasActiveZone" :color="item.conditions?.hasActiveZone ? 'indigo-7' : 'grey-5'" label="ZONA OB" class="text-weight-bold" />
+                <q-badge :outline="!item.conditions?.hasPullback" :color="item.conditions?.hasPullback ? 'indigo-7' : 'grey-5'" label="PULLBACK" class="text-weight-bold" />
+                <q-badge :outline="!item.conditions?.hasChoCH" :color="item.conditions?.hasChoCH ? 'amber-8' : 'grey-5'" label="CHoCH" class="text-weight-bold" />
+                <q-badge :outline="!item.conditions?.inDiscountPremium" :color="item.conditions?.inDiscountPremium ? 'teal-7' : 'grey-5'" :label="item.direction === 'BUY' ? 'DESC' : 'PREM'" class="text-weight-bold" />
+              </div>
+
+              <div class="row items-center justify-between q-mt-xs">
+                <span class="text-caption text-slate-500 font-mono">
+                  Precio: <strong class="text-slate-800">{{ item.currentPrice }}</strong>
+                </span>
+                <span class="text-caption text-weight-bolder font-mono" :class="item.direction === 'BUY' ? 'text-green-7' : 'text-red-7'">
+                  R:B 1:{{ item.riskReward || '2.5' }}
+                </span>
+                <q-btn
+                  flat
+                  dense
+                  size="xs"
+                  color="indigo-7"
+                  icon="candlestick_chart"
+                  :to="`/smc-synthetics?symbol=${item.symbol}`"
+                  label="Ver gráfico"
+                />
+              </div>
+            </q-card-section>
+          </q-card>
+        </div>
+      </div>
+    </template>
+
+    <!-- SMC SINTÉTICOS: VISTA HISTORIAL 24 HORAS -->
+    <template v-else>
+      <div v-if="!synthHistoryList.length" class="radar-empty q-pa-xl text-center q-mb-xl">
+        <q-icon name="history_toggle_drop_down" size="44px" color="indigo-4" />
+        <div class="text-subtitle1 text-weight-bold text-slate-700 q-mt-sm">
+          Sin señales SMC Sintéticos acumuladas en las últimas 24 horas
+        </div>
+        <div class="text-caption text-slate-500 q-mt-xs">
+          Cada vez que Step Index, Volatilities o Jumps cumplan condiciones de entrada, quedarán archivados aquí ordenados de más reciente a más antiguo por 24h.
+        </div>
+      </div>
+
+      <div v-else class="row q-col-gutter-md q-mb-xl">
+        <div
+          v-for="item in synthHistoryList"
+          :key="item.signature || (item.symbol + '_' + item.savedAt)"
+          class="col-12 col-sm-6 col-lg-4"
+        >
+          <div class="history-card-container">
+            <div class="history-timestamp-badge row items-center justify-between q-px-sm q-py-xs bg-indigo-1 text-indigo-10">
+              <span class="row items-center q-gutter-xs text-caption text-weight-bold font-mono">
+                <q-icon name="schedule" size="13px" />
+                <span>{{ formatHistoryTime(item.savedAt) }}</span>
+              </span>
+              <span class="text-caption text-indigo-8 font-mono">hace {{ formatHistoryAge(item.savedAt) }}</span>
+            </div>
+
+            <q-card
+              class="synth-compact-card"
+              :class="item.direction === 'BUY' ? 'synth-compact--buy' : 'synth-compact--sell'"
+              flat
+              style="border-top-left-radius: 0; border-top-right-radius: 0;"
+            >
+              <q-card-section class="q-pa-md">
+                <div class="row items-center justify-between q-mb-xs">
+                  <div class="row items-center q-gutter-xs">
+                    <span style="font-size:16px;">{{ item.direction === 'BUY' ? '📈' : '📉' }}</span>
+                    <span class="smc-compact-symbol">{{ item.name }}</span>
+                    <q-badge :color="item.direction === 'BUY' ? 'green-8' : 'red-8'" :label="item.direction" class="text-weight-bold" />
+                  </div>
+                  <div class="row items-center q-gutter-xs">
+                    <span v-for="n in 6" :key="n" style="font-size:10px;" :style="{ color: n <= item.score ? '#f59e0b' : '#cbd5e1' }">★</span>
+                    <q-badge :color="item.ready ? 'green-7' : 'indigo-7'" :label="item.ready ? 'LISTO ✓' : `${item.score}/6`" class="text-weight-bold q-ml-xs" />
+                  </div>
+                </div>
+
+                <div class="row q-gutter-xs q-mb-xs" v-if="item.conditions">
+                  <q-badge :outline="!item.conditions.htfBias" :color="item.conditions.htfBias ? (item.direction === 'BUY' ? 'green-7' : 'red-7') : 'grey-5'" :label="`HTF ${item.conditions.htfBiasLabel ? item.conditions.htfBiasLabel.slice(0,3) : 'H1'}`" class="text-weight-bold" />
+                  <q-badge :outline="!item.conditions.hasActiveZone" :color="item.conditions.hasActiveZone ? 'indigo-7' : 'grey-5'" label="ZONA OB" class="text-weight-bold" />
+                  <q-badge :outline="!item.conditions.hasPullback" :color="item.conditions.hasPullback ? 'indigo-7' : 'grey-5'" label="PB" class="text-weight-bold" />
+                  <q-badge :outline="!item.conditions.hasChoCH" :color="item.conditions.hasChoCH ? 'amber-8' : 'grey-5'" label="CHoCH" class="text-weight-bold" />
+                  <q-badge :outline="!item.conditions.inDiscountPremium" :color="item.conditions.inDiscountPremium ? 'teal-7' : 'grey-5'" :label="item.direction === 'BUY' ? 'DESC' : 'PREM'" class="text-weight-bold" />
+                </div>
+
+                <div class="row items-center justify-between">
+                  <span class="text-caption text-slate-500 font-mono">Precio: <strong class="text-slate-800">{{ item.currentPrice }}</strong></span>
+                  <q-btn
+                    flat
+                    dense
+                    size="xs"
+                    color="indigo-7"
+                    icon="candlestick_chart"
+                    :to="`/smc-synthetics?symbol=${item.symbol}`"
                     label="Ver gráfico"
                   />
                 </div>
@@ -619,14 +848,12 @@
 
     <!-- WEY TRADING: VISTA 1: SEÑALES ACTIVAS EN VIVO -->
     <template v-if="activeTab === 'active'">
-      <!-- Wey loading skeletons -->
       <div v-if="weyLoading && !weySignalsList.length" class="row q-col-gutter-md q-mb-xl">
         <div v-for="i in 4" :key="i" class="col-12 col-sm-6 col-lg-3">
           <q-skeleton type="rect" height="175px" style="border-radius:12px;" />
         </div>
       </div>
 
-      <!-- Wey empty state -->
       <div
         v-else-if="!weySignalsList.length"
         class="empty-box q-pa-xl text-center q-mb-xl"
@@ -669,7 +896,6 @@
         </div>
       </div>
 
-      <!-- Wey Signal Cards Grid -->
       <div v-else class="row q-col-gutter-md q-mb-xl">
         <div
           v-for="s in weySignalsList"
@@ -722,6 +948,7 @@ import { weySignalsService } from 'src/services/weySignals.service';
 import { api } from 'src/boot/axios';
 import WeySignalCard from 'src/components/WeySignalCard.vue';
 import { eaWeySMCService } from 'src/services/eaWeySMC.service.js';
+import { smcSyntheticsService } from 'src/services/smcSynthetics.service';
 
 const MAX_HISTORY_MS = 24 * 60 * 60 * 1000; // 24 horas
 
@@ -825,7 +1052,7 @@ async function loadSpikeRadar() {
 }
 
 
-// ─── EA WEY SMC Scanner ──────────────────────────────────────────────────────
+// ─── EA WEY SMC Scanner (Crash & Boom) ────────────────────────────────────────
 const SMC_HISTORY_KEY  = 'ea_smc_history_24h';
 const smcLoading       = ref(false);
 const smcAllResults    = ref([]);
@@ -869,7 +1096,6 @@ function archiveIncomingSmc(results) {
   const now = Date.now();
   let history = loadStoredSmcHistory();
 
-  // Guardar índices que están listos o tienen alta convergencia (score >= 5)
   const readyOrHigh = results.filter((r) => r.ready || (r.score && r.score >= 5));
   if (!readyOrHigh.length) return;
 
@@ -913,6 +1139,97 @@ async function loadSmcScanner() {
     console.error('Error al cargar EA WEY SMC scanner:', err);
   } finally {
     smcLoading.value = false;
+  }
+}
+
+
+// ─── SMC Sintéticos (Step Index, Volatility, Jump) ────────────────────────────
+const SYNTH_HISTORY_KEY = 'smc_synthetics_history_24h';
+const synthLoading      = ref(false);
+const synthAllResults   = ref([]);
+const synthHistoryList  = ref([]);
+const activeSynthTab    = ref('active'); // 'active' | 'history'
+const lastSynthUpdate   = ref(null);
+let synthTimer          = null;
+
+const synthReadyList = computed(() => synthAllResults.value.filter((r) => r.ready));
+
+const lastSynthUpdateTime = computed(() => {
+  if (!lastSynthUpdate.value) return '';
+  return new Date(lastSynthUpdate.value).toLocaleTimeString();
+});
+
+function loadStoredSynthHistory() {
+  try {
+    const raw = localStorage.getItem(SYNTH_HISTORY_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw);
+    const now = Date.now();
+    return (Array.isArray(list) ? list : []).filter(
+      (s) => s.savedAt && now - Number(s.savedAt) <= MAX_HISTORY_MS,
+    );
+  } catch (err) {
+    console.error('Error cargando historial SMC Sintéticos:', err);
+    return [];
+  }
+}
+
+function saveSynthHistory(list) {
+  try {
+    localStorage.setItem(SYNTH_HISTORY_KEY, JSON.stringify(list));
+  } catch (err) {
+    console.error('Error guardando historial SMC Sintéticos:', err);
+  }
+}
+
+function archiveIncomingSynth(results) {
+  if (!Array.isArray(results) || !results.length) return;
+  const now = Date.now();
+  let history = loadStoredSynthHistory();
+
+  const readyOrHigh = results.filter((r) => r.ready || (r.score && r.score >= 5));
+  if (!readyOrHigh.length) return;
+
+  for (const item of readyOrHigh) {
+    const signature = `${item.symbol}_${item.direction}_${item.score}_${Math.floor(item.currentPrice / 10)}`;
+    const existingIdx = history.findIndex((h) => h.signature === signature);
+
+    if (existingIdx >= 0) {
+      history[existingIdx] = {
+        ...history[existingIdx],
+        ...item,
+        signature,
+        savedAt: history[existingIdx].savedAt || now,
+      };
+    } else {
+      history.unshift({
+        ...item,
+        signature,
+        savedAt: now,
+      });
+    }
+  }
+
+  history = history
+    .filter((s) => s.savedAt && now - Number(s.savedAt) <= MAX_HISTORY_MS)
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+
+  synthHistoryList.value = history;
+  saveSynthHistory(history);
+}
+
+async function loadSynthScanner() {
+  synthLoading.value = true;
+  try {
+    const data = await smcSyntheticsService.scan();
+    const results = Array.isArray(data) ? data : [];
+    synthAllResults.value = results;
+    lastSynthUpdate.value = new Date().toISOString();
+    archiveIncomingSynth(results);
+  } catch (err) {
+    console.error('Error al cargar SMC Sintéticos scanner:', err);
+  } finally {
+    synthLoading.value = false;
   }
 }
 
@@ -969,7 +1286,6 @@ function archiveIncomingSignals(signals) {
   let history = loadStoredWeyHistory();
 
   for (const sig of signals) {
-    // Si no es viable y tiene menos de 2 estrellas, no aporta valor historizarla
     if (!sig.viable && (sig.estrellas ?? 0) < 2) continue;
 
     const signature = `${sig.symbol}_${sig.direccion}_${sig.estrellas}_${sig.entrada}`;
@@ -1028,7 +1344,6 @@ function updateCountdown() {
   nextEvaluationTime.value = targetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// Señales locales Wey ordenadas por estrellas de mayor a menor (4★ → 3★)
 const weySignalsList = computed(() => {
   let list = rawWeySignals.value;
   if (onlyViable.value) {
@@ -1069,22 +1384,26 @@ async function loadWeySignals() {
 onMounted(() => {
   spikeRadarHistory.value = loadStoredRadarHistory();
   smcHistoryList.value    = loadStoredSmcHistory();
+  synthHistoryList.value  = loadStoredSynthHistory();
   weyHistorySignals.value = loadStoredWeyHistory();
 
   loadSpikeRadar();
   loadWeySignals();
   loadSmcScanner();
+  loadSynthScanner();
 
   updateCountdown();
   countdownTimer = setInterval(updateCountdown, 1000);
   radarTimer     = setInterval(loadSpikeRadar, 30_000);
   smcTimer       = setInterval(loadSmcScanner, 60_000);
+  synthTimer     = setInterval(loadSynthScanner, 45_000);
 });
 
 onUnmounted(() => {
   if (countdownTimer) clearInterval(countdownTimer);
   if (radarTimer) clearInterval(radarTimer);
   if (smcTimer) clearInterval(smcTimer);
+  if (synthTimer) clearInterval(synthTimer);
 });
 </script>
 
@@ -1170,7 +1489,6 @@ onUnmounted(() => {
   color:       #1e293b;
 }
 
-/* pulse rojo para radar activo */
 .radar-pulse.active {
   background-color: #ef4444;
   box-shadow: 0 0 0 0 rgba(239,68,68,0.7);
@@ -1312,6 +1630,60 @@ onUnmounted(() => {
   0%   { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.7); }
   70%  { box-shadow: 0 0 0 7px rgba(124, 58, 237, 0); }
   100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0); }
+}
+
+/* ── SMC Sintéticos Section ──────────────────────────────────────────────── */
+.synth-section-header {
+  border-top:    1px solid #e2e8f0;
+  padding-top:   24px;
+  border-bottom: 2px solid #a5b4fc;
+  padding-bottom: 12px;
+}
+
+.synth-title {
+  font-size:      17px;
+  font-weight:    800;
+  color:          #4338ca;
+  letter-spacing: 0.3px;
+}
+
+.synth-tag {
+  font-size:      9px;
+  font-weight:    800;
+  background:     #e0e7ff;
+  color:          #4338ca;
+  padding:        2px 6px;
+  border-radius:  4px;
+  letter-spacing: 0.8px;
+}
+
+.synth-pulse.active {
+  background:  #4338ca;
+  box-shadow:  0 0 0 0 rgba(67, 56, 202, 0.6);
+  animation:   synth-pulse-anim 2s ease-in-out infinite;
+}
+@keyframes synth-pulse-anim {
+  0%   { box-shadow: 0 0 0 0 rgba(67, 56, 202, 0.7); }
+  70%  { box-shadow: 0 0 0 7px rgba(67, 56, 202, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(67, 56, 202, 0); }
+}
+
+.synth-compact-card {
+  border-radius: 12px;
+  transition:    box-shadow 0.2s;
+}
+.synth-compact-card:hover {
+  box-shadow: 0 4px 16px 0 rgba(67, 56, 202, 0.12);
+}
+.synth-compact--buy {
+  border-color: #86efac !important;
+  border-top: 3px solid #10b981 !important;
+  background:   linear-gradient(135deg, #f0fdf4 0%, #fff 100%);
+}
+.synth-compact--sell {
+  border-color: #fca5a5 !important;
+  border-top: 3px solid #ef4444 !important;
+  background:   linear-gradient(135deg, #fff5f5 0%, #fff 100%);
 }
 
 /* ── Historial de Señales Container ──────────────────────────────────────── */
