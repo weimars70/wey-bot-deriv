@@ -376,3 +376,4 @@ onBeforeUnmount(() => {
   background: rgba(16, 185, 129, 0.15);
 }
 </style>
+
