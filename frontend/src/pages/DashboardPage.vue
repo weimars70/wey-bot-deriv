@@ -364,66 +364,125 @@
       </div>
     </div>
 
-    <!-- Wey loading skeletons -->
-    <div v-if="weyLoading && !weySignalsList.length" class="row q-col-gutter-md q-mb-xl">
-      <div v-for="i in 4" :key="i" class="col-12 col-sm-6 col-lg-3">
-        <q-skeleton type="rect" height="175px" style="border-radius:12px;" />
-      </div>
-    </div>
-
-    <!-- Wey empty state -->
-    <div
-      v-else-if="!weySignalsList.length"
-      class="empty-box q-pa-xl text-center q-mb-xl"
-    >
-      <q-icon name="stars" size="44px" color="amber-7" />
-      <div class="text-subtitle1 text-weight-bold text-slate-800 q-mt-sm">
-        No hay seÃ±ales Wey {{ onlySniperFourStars ? '4â˜… Sniper' : 'viables' }} en este momento
-      </div>
-      <div class="text-caption text-slate-500 q-mt-xs">
-        El motor Sniper filtra entradas sin Order Block activo (30%â€“85%), sin estructura M15 limpia, con recorrido agotado (&gt;45%) o en mercados frÃ­os (&lt;2 spikes en 3h).
-      </div>
-      <div class="row items-center justify-center q-gutter-sm q-mt-md">
-        <q-btn
-          v-if="onlySniperFourStars"
-          outline
-          dense
-          color="amber-9"
-          label="Ver tambiÃ©n seÃ±ales 3â˜… viables"
-          class="q-px-sm text-weight-bold"
-          @click="onlySniperFourStars = false"
-        />
-        <q-btn
-          v-if="onlyViable"
-          outline
-          dense
-          color="primary"
-          label="Ver diagnÃ³stico de todos los Ã­ndices (incl. no viables)"
-          class="q-px-sm text-weight-bold"
-          @click="onlyViable = false; onlySniperFourStars = false; onlyThreeStars = false"
-        />
-        <q-btn
-          v-if="onlyThreeStars && !onlyViable"
-          flat
-          dense
-          color="slate-700"
-          label="Mostrar tambiÃ©n 1â˜… y 2â˜…"
-          class="q-px-sm text-weight-bold"
-          @click="onlyThreeStars = false"
-        />
-      </div>
-    </div>
-
-    <!-- Wey Signal Cards Grid (identicas a Apex, ordenadas por estrellas desc) -->
-    <div v-else class="row q-col-gutter-md q-mb-xl">
-      <div
-        v-for="s in weySignalsList"
-        :key="s.symbol"
-        class="col-12 col-sm-6 col-lg-3"
+    <!-- Tabs para alternar entre En Vivo y Bitácora 24 Horas -->
+    <div class="row items-center justify-between q-mb-md">
+      <q-tabs
+        v-model="activeTab"
+        dense
+        no-caps
+        active-color="primary"
+        indicator-color="primary"
+        class="text-slate-600 bg-white shadow-1 rounded-borders"
+        style="border: 1px solid #e2e8f0; border-radius: 8px;"
       >
-        <WeySignalCard :signal="s" />
-      </div>
+        <q-tab name="active" label="⚡ Señales Activas / En Vivo">
+          <q-badge color="indigo-7" :label="weySignalsList.length" class="q-ml-xs text-weight-bold" />
+        </q-tab>
+        <q-tab name="history" label="🕒 Historial de Señales (24 Horas)">
+          <q-badge color="amber-9" :label="weyHistorySignals.length" class="q-ml-xs text-weight-bold" />
+        </q-tab>
+      </q-tabs>
+
+      <span v-if="activeTab === 'history'" class="text-caption text-slate-500">
+        Las señales se conservan ordenadas cronológicamente de más reciente a más antigua y expiran automáticamente tras 24h.
+      </span>
     </div>
+
+    <!-- VISTA 1: SEÑALES ACTIVAS EN VIVO -->
+    <template v-if="activeTab === 'active'">
+      <!-- Wey loading skeletons -->
+      <div v-if="weyLoading && !weySignalsList.length" class="row q-col-gutter-md q-mb-xl">
+        <div v-for="i in 4" :key="i" class="col-12 col-sm-6 col-lg-3">
+          <q-skeleton type="rect" height="175px" style="border-radius:12px;" />
+        </div>
+      </div>
+
+      <!-- Wey empty state -->
+      <div
+        v-else-if="!weySignalsList.length"
+        class="empty-box q-pa-xl text-center q-mb-xl"
+      >
+        <q-icon name="stars" size="44px" color="amber-7" />
+        <div class="text-subtitle1 text-weight-bold text-slate-800 q-mt-sm">
+          No hay señales Wey {{ onlySniperFourStars ? '4★ Sniper' : 'viables' }} en este momento
+        </div>
+        <div class="text-caption text-slate-500 q-mt-xs">
+          El motor Sniper filtra entradas sin Order Block activo (30%–85%), sin estructura M15 limpia, con recorrido agotado (&gt;45%) o en mercados fríos (&lt;2 spikes en 3h).
+        </div>
+        <div class="row items-center justify-center q-gutter-sm q-mt-md">
+          <q-btn
+            v-if="onlySniperFourStars"
+            outline
+            dense
+            color="amber-9"
+            label="Ver también señales 3★ viables"
+            class="q-px-sm text-weight-bold"
+            @click="onlySniperFourStars = false"
+          />
+          <q-btn
+            v-if="onlyViable"
+            outline
+            dense
+            color="primary"
+            label="Ver diagnóstico de todos los índices (incl. no viables)"
+            class="q-px-sm text-weight-bold"
+            @click="onlyViable = false; onlySniperFourStars = false; onlyThreeStars = false"
+          />
+          <q-btn
+            v-if="onlyThreeStars && !onlyViable"
+            flat
+            dense
+            color="slate-700"
+            label="Mostrar también 1★ y 2★"
+            class="q-px-sm text-weight-bold"
+            @click="onlyThreeStars = false"
+          />
+        </div>
+      </div>
+
+      <!-- Wey Signal Cards Grid -->
+      <div v-else class="row q-col-gutter-md q-mb-xl">
+        <div
+          v-for="s in weySignalsList"
+          :key="s.symbol"
+          class="col-12 col-sm-6 col-lg-3"
+        >
+          <WeySignalCard :signal="s" />
+        </div>
+      </div>
+    </template>
+
+    <!-- VISTA 2: HISTORIAL CONSERVADO (ÚLTIMAS 24 HORAS) -->
+    <template v-else>
+      <div v-if="!weyHistorySignals.length" class="empty-box q-pa-xl text-center q-mb-xl">
+        <q-icon name="history_toggle_drop_down" size="44px" color="slate-4" />
+        <div class="text-subtitle1 text-weight-bold text-slate-700 q-mt-sm">
+          Sin señales acumuladas en las últimas 24 horas
+        </div>
+        <div class="text-caption text-slate-500 q-mt-xs">
+          Cada vez que el motor Wey detecte señales viables, quedarán archivadas aquí automáticamente ordenadas de la más reciente a la más antigua.
+        </div>
+      </div>
+
+      <div v-else class="row q-col-gutter-md q-mb-xl">
+        <div
+          v-for="s in weyHistorySignals"
+          :key="s.signature || (s.symbol + '_' + s.savedAt)"
+          class="col-12 col-sm-6 col-lg-3"
+        >
+          <div class="history-card-container">
+            <div class="history-timestamp-badge row items-center justify-between q-px-sm q-py-xs">
+              <span class="row items-center q-gutter-xs text-caption text-weight-bold font-mono">
+                <q-icon name="schedule" size="13px" />
+                <span>{{ formatHistoryTime(s.savedAt) }}</span>
+              </span>
+              <span class="text-caption text-slate-500 font-mono">hace {{ formatHistoryAge(s.savedAt) }}</span>
+            </div>
+            <WeySignalCard :signal="s" />
+          </div>
+        </div>
+      </div>
+    </template>
 
   </q-page>
 </template>
@@ -459,6 +518,90 @@ async function loadSpikeRadar() {
   }
 }
 
+
+// ─── Historial de Señales Wey (24 horas) ──────────────────────────────
+const WEY_HISTORY_KEY = 'wey_signals_history_24h';
+const MAX_HISTORY_MS  = 24 * 60 * 60 * 1000; // 24 horas
+
+const weyHistorySignals = ref([]);
+const activeTab = ref('active'); // 'active' | 'history'
+
+function loadStoredWeyHistory() {
+  try {
+    const raw = localStorage.getItem(WEY_HISTORY_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw);
+    const now = Date.now();
+    // Filtrar aquellas con más de 24 horas
+    return (Array.isArray(list) ? list : []).filter(
+      (s) => s.savedAt && now - Number(s.savedAt) <= MAX_HISTORY_MS,
+    );
+  } catch (err) {
+    console.error('Error cargando historial de señales:', err);
+    return [];
+  }
+}
+
+function saveWeyHistory(list) {
+  try {
+    localStorage.setItem(WEY_HISTORY_KEY, JSON.stringify(list));
+  } catch (err) {
+    console.error('Error guardando historial de señales:', err);
+  }
+}
+
+function archiveIncomingSignals(signals) {
+  if (!Array.isArray(signals) || !signals.length) return;
+  const now = Date.now();
+  let history = loadStoredWeyHistory();
+
+  for (const sig of signals) {
+    // Si no es viable y tiene menos de 2 estrellas, no aporta valor historizarla
+    if (!sig.viable && (sig.estrellas ?? 0) < 2) continue;
+
+    const signature = `${sig.symbol}_${sig.direccion}_${sig.estrellas}_${sig.entrada}`;
+    const existingIdx = history.findIndex((h) => h.signature === signature);
+
+    if (existingIdx >= 0) {
+      // Actualizar datos conservando fecha original si tiene menos de 2h
+      history[existingIdx] = {
+        ...history[existingIdx],
+        ...sig,
+        signature,
+        savedAt: history[existingIdx].savedAt || now,
+      };
+    } else {
+      // Nueva señal detectada: agregar al inicio (más reciente primero)
+      history.unshift({
+        ...sig,
+        signature,
+        savedAt: now,
+      });
+    }
+  }
+
+  // Filtrar estrictamente las más antiguas que 24 horas y ordenar desc (más reciente arriba)
+  history = history
+    .filter((s) => s.savedAt && now - Number(s.savedAt) <= MAX_HISTORY_MS)
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+
+  weyHistorySignals.value = history;
+  saveWeyHistory(history);
+}
+
+function formatHistoryTime(epoch) {
+  if (!epoch) return '--:--';
+  return new Date(Number(epoch)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatHistoryAge(epoch) {
+  if (!epoch) return '0m';
+  const diff = Date.now() - Number(epoch);
+  const min = Math.floor(diff / 60000);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ${min % 60}m`;
+}
 
 // ─── EA WEY SMC Scanner ──────────────────────────────────────────────────────
 const smcLoading    = ref(false);
@@ -567,15 +710,17 @@ async function loadWeySignals() {
     if (res && Array.isArray(res.signals)) {
       rawWeySignals.value = res.signals;
       lastWeyUpdate.value = res.lastUpdated || new Date().toISOString();
+      archiveIncomingSignals(res.signals);
     }
   } catch (err) {
-    console.error('Error al cargar seÃ±ales Wey:', err);
+    console.error('Error al cargar señales Wey:', err);
   } finally {
     weyLoading.value = false;
   }
 }
 
 onMounted(() => {
+  weyHistorySignals.value = loadStoredWeyHistory();
   loadSpikeRadar();
   loadWeySignals();
   updateCountdown();
@@ -819,5 +964,19 @@ onUnmounted(() => {
   0%   { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.7); }
   70%  { box-shadow: 0 0 0 7px rgba(124, 58, 237, 0); }
   100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0); }
+}
+
+/* ── Historial de Señales Container ── */
+.history-card-container {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.history-timestamp-badge {
+  background-color: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+  color: #334155;
 }
 </style>
