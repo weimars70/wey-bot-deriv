@@ -550,14 +550,16 @@ export class SmcSyntheticsService {
       let takeProfitPrice = 0;
 
       if (direction === 'BUY') {
-        const zoneBottom = smcZone ? smcZone.bottom : currentPrice - 1.5 * atr;
-        stopLossPrice = Number((zoneBottom - 1.0 * atr).toFixed(4));
-        const targetHigh = Math.max(rangeHigh, currentPrice + 3.0 * atr);
+        const zoneBottom = smcZone ? smcZone.bottom : currentPrice - 0.7 * atr;
+        stopLossPrice = Number((Math.min(entryPrice, zoneBottom) - 0.35 * atr).toFixed(4));
+        const risk = Math.max(Math.abs(entryPrice - stopLossPrice), 0.4 * atr);
+        const targetHigh = Math.max(rangeHigh, entryPrice + 2.8 * risk);
         takeProfitPrice = Number(targetHigh.toFixed(4));
       } else {
-        const zoneTop = smcZone ? smcZone.top : currentPrice + 1.5 * atr;
-        stopLossPrice = Number((zoneTop + 1.0 * atr).toFixed(4));
-        const targetLow = Math.min(rangeLow, currentPrice - 3.0 * atr);
+        const zoneTop = smcZone ? smcZone.top : currentPrice + 0.7 * atr;
+        stopLossPrice = Number((Math.max(entryPrice, zoneTop) + 0.35 * atr).toFixed(4));
+        const risk = Math.max(Math.abs(stopLossPrice - entryPrice), 0.4 * atr);
+        const targetLow = Math.min(rangeLow, entryPrice - 2.8 * risk);
         takeProfitPrice = Number(targetLow.toFixed(4));
       }
 

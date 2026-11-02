@@ -106,6 +106,10 @@ export interface EaWeySMCResult {
   conditions: EaWeySMCConditions;
   pricePosition: number;
   currentPrice: number;
+  entryPrice: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  riskReward: number;
   reason: string;
   chart: ChartData;
 }
@@ -287,7 +291,7 @@ export class EaWeySMCService {
 
   private async evaluateSymbol(symbol: string, name: string, direction: 'BUY' | 'SELL'): Promise<EaWeySMCResult> {
     const empty: ChartData = { candles: [], candlesH1: [], smcZones: [], swingPoints: [], fvgZones: [], obZones: [], htfBiasLine: null, htfSwingHighs: [], htfSwingLows: [], watchLevel: null, entrySignals: [], currentPrice: 0, atr: 0, rangeHigh: 0, rangeLow: 0 };
-    const def: EaWeySMCResult = { symbol, name, direction, ready: false, score: 0, conditions: { htfBias: false, htfBiasLabel: 'NEUTRAL', hasActiveZone: false, hasPullback: false, hasChoCH: false, inDiscountPremium: false, hasRecentSpike: false, notExhausted: false }, pricePosition: 50, currentPrice: 0, reason: 'Error', chart: empty };
+    const def: EaWeySMCResult = { symbol, name, direction, ready: false, score: 0, conditions: { htfBias: false, htfBiasLabel: 'NEUTRAL', hasActiveZone: false, hasPullback: false, hasChoCH: false, inDiscountPremium: false, hasRecentSpike: false, notExhausted: false }, pricePosition: 50, currentPrice: 0, entryPrice: 0, stopLossPrice: 0, takeProfitPrice: 0, riskReward: 0, reason: 'Error', chart: empty };
 
     try {
       const [m5Raw, h1Raw] = await Promise.all([
@@ -353,6 +357,23 @@ export class EaWeySMCService {
       const fvgZones = findFVGs(m5, atr);
       const obZones  = findOBs(m5, atr);
 
+      // Precios SL y TP cortos y ajustados (SMC)
+      const entryPrice = smcZone?.chochLevel || currentPrice;
+      let stopLossPrice = 0;
+      let takeProfitPrice = 0;
+      if (direction === 'BUY') {
+        const zoneBottom = smcZone ? smcZone.bottom : currentPrice - 0.8 * atr;
+        stopLossPrice = Number((Math.min(entryPrice, zoneBottom) - 0.4 * atr).toFixed(2));
+        const risk = Math.max(Math.abs(entryPrice - stopLossPrice), 0.5 * atr);
+        takeProfitPrice = Number((entryPrice + 3.0 * risk).toFixed(2));
+      } else {
+        const zoneTop = smcZone ? smcZone.top : currentPrice + 0.8 * atr;
+        stopLossPrice = Number((Math.max(entryPrice, zoneTop) + 0.4 * atr).toFixed(2));
+        const risk = Math.max(Math.abs(stopLossPrice - entryPrice), 0.5 * atr);
+        takeProfitPrice = Number((entryPrice - 3.0 * risk).toFixed(2));
+      }
+      const riskReward = 3.0;
+
       // Señal de entrada
       const entrySignals: EntrySignal[] = [];
       if (hasChoCH && smcZone?.chochLevel != null) {
@@ -396,7 +417,7 @@ export class EaWeySMCService {
         currentPrice, atr, rangeHigh, rangeLow,
       };
 
-      return { symbol, name, direction, ready, score, conditions, pricePosition: Math.round(pricePosition * 10) / 10, currentPrice, reason, chart };
+      return { symbol, name, direction, ready, score, conditions, pricePosition: Math.round(pricePosition * 10) / 10, currentPrice, entryPrice, stopLossPrice, takeProfitPrice, riskReward, reason, chart };
 
     } catch (err: any) {
       this.logger.error(`Error evaluando ${symbol}: ${err?.message ?? err}`);

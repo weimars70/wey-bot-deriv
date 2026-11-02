@@ -126,21 +126,25 @@
               </div>
 
               <div class="row q-col-gutter-xs q-mb-sm">
-                <div class="col-6">
-                  <div class="radar-label">Precio actual</div>
-                  <div class="radar-value">{{ entry.currentPrice }}</div>
+                <div class="col-4">
+                  <div class="radar-label">Precio Actual</div>
+                  <div class="radar-value font-mono">{{ entry.currentPrice }}</div>
                 </div>
-                <div class="col-6">
-                  <div class="radar-label">Entrada OB 50%</div>
-                  <div class="radar-value text-weight-bold" :class="entry.canSell ? 'text-red-8' : 'text-green-8'">{{ entry.entryLevel50 }}</div>
+                <div class="col-4">
+                  <div class="radar-label">Entrada OB</div>
+                  <div class="radar-value font-mono text-weight-bold" :class="entry.canSell ? 'text-red-8' : 'text-green-8'">{{ entry.entryLevel50 }}</div>
                 </div>
-                <div class="col-6">
-                  <div class="radar-label">Stop Loss</div>
-                  <div class="radar-value text-negative">{{ entry.stopLossPrice }}</div>
+                <div class="col-4">
+                  <div class="radar-label">R:B Objetivo</div>
+                  <div class="radar-value font-mono text-weight-bold text-positive">1:{{ entry.riskReward || '3.0' }}</div>
                 </div>
-                <div class="col-6">
-                  <div class="radar-label">Línea H1</div>
-                  <div class="radar-value text-indigo-7">{{ entry.h1LinePrice }}</div>
+                <div class="col-6 q-mt-xs">
+                  <div class="radar-label">Stop Loss (SL Ceñido)</div>
+                  <div class="radar-value font-mono text-negative text-weight-bolder">{{ entry.stopLossPrice }}</div>
+                </div>
+                <div class="col-6 q-mt-xs">
+                  <div class="radar-label">Take Profit (TP)</div>
+                  <div class="radar-value font-mono text-positive text-weight-bolder">{{ entry.takeProfitPrice || (entry.canSell ? (entry.entryLevel50 - 3 * Math.abs(entry.stopLossPrice - entry.entryLevel50)).toFixed(2) : (entry.entryLevel50 + 3 * Math.abs(entry.entryLevel50 - entry.stopLossPrice)).toFixed(2)) }}</div>
                 </div>
               </div>
 
@@ -229,21 +233,25 @@
                 </div>
 
                 <div class="row q-col-gutter-xs q-mb-sm">
-                  <div class="col-6">
-                    <div class="radar-label">Precio al registrar</div>
-                    <div class="radar-value">{{ entry.currentPrice }}</div>
+                  <div class="col-4">
+                    <div class="radar-label">Precio Registro</div>
+                    <div class="radar-value font-mono">{{ entry.currentPrice }}</div>
                   </div>
-                  <div class="col-6">
-                    <div class="radar-label">Entrada OB 50%</div>
-                    <div class="radar-value text-weight-bold" :class="entry.canSell ? 'text-red-8' : 'text-green-8'">{{ entry.entryLevel50 }}</div>
+                  <div class="col-4">
+                    <div class="radar-label">Entrada OB</div>
+                    <div class="radar-value font-mono text-weight-bold" :class="entry.canSell ? 'text-red-8' : 'text-green-8'">{{ entry.entryLevel50 }}</div>
                   </div>
-                  <div class="col-6">
-                    <div class="radar-label">Stop Loss</div>
-                    <div class="radar-value text-negative">{{ entry.stopLossPrice }}</div>
+                  <div class="col-4">
+                    <div class="radar-label">R:B</div>
+                    <div class="radar-value font-mono text-weight-bold text-positive">1:{{ entry.riskReward || '3.0' }}</div>
                   </div>
-                  <div class="col-6">
-                    <div class="radar-label">Línea H1</div>
-                    <div class="radar-value text-indigo-7">{{ entry.h1LinePrice }}</div>
+                  <div class="col-6 q-mt-xs">
+                    <div class="radar-label">Stop Loss (SL)</div>
+                    <div class="radar-value font-mono text-negative text-weight-bolder">{{ entry.stopLossPrice }}</div>
+                  </div>
+                  <div class="col-6 q-mt-xs">
+                    <div class="radar-label">Take Profit (TP)</div>
+                    <div class="radar-value font-mono text-positive text-weight-bolder">{{ entry.takeProfitPrice || (entry.canSell ? (entry.entryLevel50 - 3 * Math.abs(entry.stopLossPrice - entry.entryLevel50)).toFixed(2) : (entry.entryLevel50 + 3 * Math.abs(entry.entryLevel50 - entry.stopLossPrice)).toFixed(2)) }}</div>
                   </div>
                 </div>
 
@@ -408,9 +416,23 @@
                 <q-badge :outline="!item.conditions.hasRecentSpike" :color="item.conditions.hasRecentSpike ? 'amber-7' : 'grey-5'" label="SPIKE" class="text-weight-bold" />
                 <q-badge :outline="!item.conditions.notExhausted" :color="item.conditions.notExhausted ? 'teal-7' : 'grey-5'" label="45%" class="text-weight-bold" />
               </div>
-              <div class="row items-center justify-between">
-                <span class="text-caption text-slate-500">Precio: <strong class="text-slate-800">{{ item.currentPrice }}</strong></span>
-                <span class="text-caption text-slate-500">Rango: <strong :class="item.direction === 'BUY' ? 'text-green-7' : 'text-red-7'">{{ item.pricePosition }}%</strong></span>
+              <div class="row q-col-gutter-xs q-mt-xs q-mb-xs">
+                <div class="col-4">
+                  <div class="radar-label">Entrada</div>
+                  <div class="radar-value font-mono text-weight-bold" :class="item.direction === 'BUY' ? 'text-green-8' : 'text-red-8'">{{ item.entryPrice || item.currentPrice }}</div>
+                </div>
+                <div class="col-4">
+                  <div class="radar-label">SL Corto</div>
+                  <div class="radar-value font-mono text-negative text-weight-bolder">{{ item.stopLossPrice || '-' }}</div>
+                </div>
+                <div class="col-4">
+                  <div class="radar-label">TP (1:3)</div>
+                  <div class="radar-value font-mono text-positive text-weight-bolder">{{ item.takeProfitPrice || '-' }}</div>
+                </div>
+              </div>
+              <div class="row items-center justify-between q-mt-xs">
+                <span class="text-caption text-slate-500 font-mono">Precio: <strong>{{ item.currentPrice }}</strong> · Rango: <strong :class="item.direction === 'BUY' ? 'text-green-7' : 'text-red-7'">{{ item.pricePosition }}%</strong></span>
+                <q-btn flat dense size="xs" color="purple-8" icon="candlestick_chart" :to="`/ea-wey-smc?symbol=${item.symbol}`" label="Ver gráfico" />
               </div>
             </q-card-section>
           </q-card>
@@ -474,17 +496,23 @@
                   <q-badge :outline="!item.conditions.notExhausted" :color="item.conditions.notExhausted ? 'teal-7' : 'grey-5'" label="45%" class="text-weight-bold" />
                 </div>
 
-                <div class="row items-center justify-between">
-                  <span class="text-caption text-slate-500">Precio: <strong class="text-slate-800">{{ item.currentPrice }}</strong></span>
-                  <q-btn
-                    flat
-                    dense
-                    size="xs"
-                    color="purple-8"
-                    icon="candlestick_chart"
-                    :to="`/ea-wey-smc?symbol=${item.symbol}`"
-                    label="Ver gráfico"
-                  />
+                <div class="row q-col-gutter-xs q-mt-xs q-mb-xs">
+                  <div class="col-4">
+                    <div class="radar-label">Entrada</div>
+                    <div class="radar-value font-mono text-weight-bold" :class="item.direction === 'BUY' ? 'text-green-8' : 'text-red-8'">{{ item.entryPrice || item.currentPrice }}</div>
+                  </div>
+                  <div class="col-4">
+                    <div class="radar-label">SL Corto</div>
+                    <div class="radar-value font-mono text-negative text-weight-bolder">{{ item.stopLossPrice || '-' }}</div>
+                  </div>
+                  <div class="col-4">
+                    <div class="radar-label">TP (1:3)</div>
+                    <div class="radar-value font-mono text-positive text-weight-bolder">{{ item.takeProfitPrice || '-' }}</div>
+                  </div>
+                </div>
+                <div class="row items-center justify-between q-mt-xs">
+                  <span class="text-caption text-slate-500 font-mono">Precio: <strong>{{ item.currentPrice }}</strong></span>
+                  <q-btn flat dense size="xs" color="purple-8" icon="candlestick_chart" :to="`/ea-wey-smc?symbol=${item.symbol}`" label="Ver gráfico" />
                 </div>
               </q-card-section>
             </q-card>
@@ -632,22 +660,23 @@
                 <q-badge :outline="!item.conditions?.inDiscountPremium" :color="item.conditions?.inDiscountPremium ? 'teal-7' : 'grey-5'" :label="item.direction === 'BUY' ? 'DESC' : 'PREM'" class="text-weight-bold" />
               </div>
 
+              <div class="row q-col-gutter-xs q-mt-xs q-mb-xs">
+                <div class="col-4">
+                  <div class="radar-label">Entrada</div>
+                  <div class="radar-value font-mono text-weight-bold" :class="item.direction === 'BUY' ? 'text-green-8' : 'text-red-8'">{{ item.entryPrice || item.currentPrice }}</div>
+                </div>
+                <div class="col-4">
+                  <div class="radar-label">SL Corto</div>
+                  <div class="radar-value font-mono text-negative text-weight-bolder">{{ item.stopLossPrice || '-' }}</div>
+                </div>
+                <div class="col-4">
+                  <div class="radar-label">Take Profit</div>
+                  <div class="radar-value font-mono text-positive text-weight-bolder">{{ item.takeProfitPrice || '-' }}</div>
+                </div>
+              </div>
               <div class="row items-center justify-between q-mt-xs">
-                <span class="text-caption text-slate-500 font-mono">
-                  Precio: <strong class="text-slate-800">{{ item.currentPrice }}</strong>
-                </span>
-                <span class="text-caption text-weight-bolder font-mono" :class="item.direction === 'BUY' ? 'text-green-7' : 'text-red-7'">
-                  R:B 1:{{ item.riskReward || '2.5' }}
-                </span>
-                <q-btn
-                  flat
-                  dense
-                  size="xs"
-                  color="indigo-7"
-                  icon="candlestick_chart"
-                  :to="`/smc-synthetics?symbol=${item.symbol}`"
-                  label="Ver gráfico"
-                />
+                <span class="text-caption text-slate-500 font-mono">Precio: <strong>{{ item.currentPrice }}</strong> · R:B <strong :class="item.direction === 'BUY' ? 'text-green-7' : 'text-red-7'">1:{{ item.riskReward || '2.8' }}</strong></span>
+                <q-btn flat dense size="xs" color="indigo-7" icon="candlestick_chart" :to="`/smc-synthetics?symbol=${item.symbol}`" label="Ver gráfico" />
               </div>
             </q-card-section>
           </q-card>
@@ -709,17 +738,23 @@
                   <q-badge :outline="!item.conditions.inDiscountPremium" :color="item.conditions.inDiscountPremium ? 'teal-7' : 'grey-5'" :label="item.direction === 'BUY' ? 'DESC' : 'PREM'" class="text-weight-bold" />
                 </div>
 
-                <div class="row items-center justify-between">
-                  <span class="text-caption text-slate-500 font-mono">Precio: <strong class="text-slate-800">{{ item.currentPrice }}</strong></span>
-                  <q-btn
-                    flat
-                    dense
-                    size="xs"
-                    color="indigo-7"
-                    icon="candlestick_chart"
-                    :to="`/smc-synthetics?symbol=${item.symbol}`"
-                    label="Ver gráfico"
-                  />
+                <div class="row q-col-gutter-xs q-mt-xs q-mb-xs">
+                  <div class="col-4">
+                    <div class="radar-label">Entrada</div>
+                    <div class="radar-value font-mono text-weight-bold" :class="item.direction === 'BUY' ? 'text-green-8' : 'text-red-8'">{{ item.entryPrice || item.currentPrice }}</div>
+                  </div>
+                  <div class="col-4">
+                    <div class="radar-label">SL Corto</div>
+                    <div class="radar-value font-mono text-negative text-weight-bolder">{{ item.stopLossPrice || '-' }}</div>
+                  </div>
+                  <div class="col-4">
+                    <div class="radar-label">Take Profit</div>
+                    <div class="radar-value font-mono text-positive text-weight-bolder">{{ item.takeProfitPrice || '-' }}</div>
+                  </div>
+                </div>
+                <div class="row items-center justify-between q-mt-xs">
+                  <span class="text-caption text-slate-500 font-mono">Precio: <strong>{{ item.currentPrice }}</strong> · R:B <strong :class="item.direction === 'BUY' ? 'text-green-7' : 'text-red-7'">1:{{ item.riskReward || '2.8' }}</strong></span>
+                  <q-btn flat dense size="xs" color="indigo-7" icon="candlestick_chart" :to="`/smc-synthetics?symbol=${item.symbol}`" label="Ver gráfico" />
                 </div>
               </q-card-section>
             </q-card>

@@ -143,6 +143,8 @@ export interface SpikeRadarEntry {
   currentPrice:        number;
   entryLevel50:        number;
   stopLossPrice:       number;
+  takeProfitPrice:     number;
+  riskReward:          number;
   h1LinePrice:         number;
   vLinePrice:          number;
   obStatus:            'FRESCO' | 'EN_ZONA' | 'MITIGADO' | 'INVALIDADO';
@@ -267,16 +269,18 @@ export class CrashIaStrategyService {
       boxCeiling = vLinePrice + (3 * m5CandleHeight);
       entryLevel50 = vLinePrice + (0.5 * 3 * m5CandleHeight); // 50% superior / resistencia
       // Stop Loss con suficiente margen estructural y holgura adecuada (mínimo amplio para 100 y 200)
-      const rawSl = boxCeiling + (2.0 * m5CandleHeight);
-      stopLossPrice = Math.max(rawSl, currentPrice + minSlBuffer, entryLevel50 + minSlBuffer);
+      const rawSl = boxCeiling + (0.7 * m5CandleHeight);
+      const safeBuffer = Math.min(minSlBuffer, m5CandleHeight * 0.8);
+      stopLossPrice = Math.max(rawSl, currentPrice + safeBuffer, entryLevel50 + safeBuffer);
     } else {
       // ── BOOM: Caja proyectada hacia ABAJO (el precio retrocede cayendo hacia el soporte de compra)
       boxCeiling = vLinePrice;
       boxFloor = vLinePrice - (3 * m5CandleHeight);
       entryLevel50 = vLinePrice - (0.5 * 3 * m5CandleHeight); // 50% inferior / descuento institucional
       // Stop Loss con suficiente margen estructural y holgura adecuada (mínimo amplio para 100 y 200)
-      const rawSl = boxFloor - (2.0 * m5CandleHeight);
-      stopLossPrice = Math.min(rawSl, currentPrice - minSlBuffer, entryLevel50 - minSlBuffer);
+      const rawSl = boxFloor - (0.7 * m5CandleHeight);
+      const safeBuffer = Math.min(minSlBuffer, m5CandleHeight * 0.8);
+      stopLossPrice = Math.min(rawSl, currentPrice - safeBuffer, entryLevel50 - safeBuffer);
     }
 
     // 6. Nivel Estructural H1 (Fractal mayor: resistencia en Crash / soporte en Boom)
@@ -616,6 +620,12 @@ export class CrashIaStrategyService {
       if (ev.marketType === 'BOOM'  && rsi > 55) score += 5;
       if (ob.distToPrice <= ev.m5CandleHeight * 0.5) score += 10; // precio dentro del OB exacto
 
+      const risk = Math.max(Math.abs(ev.entryLevel50 - ev.stopLossPrice), ev.m5CandleHeight * 0.6);
+      const takeProfitPrice = ev.marketType === 'CRASH'
+        ? Number((ev.entryLevel50 - 3.0 * risk).toFixed(2))
+        : Number((ev.entryLevel50 + 3.0 * risk).toFixed(2));
+      const riskReward = 3.0;
+
       radar.push({
         symbol:         ev.symbol,
         mercado:        ev.mercado,
@@ -624,6 +634,8 @@ export class CrashIaStrategyService {
         currentPrice:   ev.currentPrice,
         entryLevel50:   ev.entryLevel50,
         stopLossPrice:  ev.stopLossPrice,
+        takeProfitPrice,
+        riskReward,
         h1LinePrice:    ev.h1LinePrice,
         vLinePrice:     ev.vLinePrice,
         obStatus:       ob.status,
