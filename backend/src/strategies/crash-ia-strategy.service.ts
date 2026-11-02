@@ -303,23 +303,22 @@ export class CrashIaStrategyService {
         ? 'BAJISTA'
         : 'ALCISTA';
 
-    // En Crash: precio <= EMA50, EMA21 <= EMA50 y pendiente bajista; En Boom: precio >= EMA50, EMA21 >= EMA50 y pendiente alcista
+    // En Crash: precio <= EMA50 o tendencia bajista M15; En Boom: precio >= EMA50 o tendencia alcista M15
     const trendOk = isBoom
-      ? currentPrice >= ema50_M15 && ema21_M15 >= ema50_M15 * 0.9997 && ema50_M15 >= ema50Prev_M15 * 0.9998
-      : currentPrice <= ema50_M15 && ema21_M15 <= ema50_M15 * 1.0003 && ema50_M15 <= ema50Prev_M15 * 1.0002;
+      ? currentPrice >= ema50_M15 * 0.998 || trendM15 === 'ALCISTA'
+      : currentPrice <= ema50_M15 * 1.002 || trendM15 === 'BAJISTA';
 
-    // 8. Filtro 2: RSI 14 en M5 (acotado para evitar tendencias descontroladas sin spikes)
-    // En Crash: zona de recarga (60.0 <= RSI <= 78.0)
-    // En Boom: zona de descuento (22.0 <= RSI <= 40.0)
+    // 8. Filtro 2: RSI 14 en M5 (evitar zonas sobreextendidas en contra del spike)
+    // En Crash: 28.0 <= RSI <= 78.0 (con margen para el retroceso antes de la caída)
+    // En Boom: 22.0 <= RSI <= 72.0 (con margen para el retroceso antes de la subida)
     const rsi_M5 = this.calculateRSI(m5Candles.map((c) => Number(c.close)), 14);
-    const rsiOk = isBoom ? (rsi_M5 <= 40.0 && rsi_M5 >= 20.0) : (rsi_M5 >= 60.0 && rsi_M5 <= 80.0);
+    const rsiOk = isBoom ? (rsi_M5 <= 72.0 && rsi_M5 >= 22.0) : (rsi_M5 >= 28.0 && rsi_M5 <= 78.0);
 
     // 9. Filtro 3: Velas M1 de enfriamiento tras spike
-    // En Crash: mínimo 3 velas verdes consecutivas hacia arriba tras el spike
-    // En Boom: mínimo 3 velas rojas consecutivas hacia abajo tras el spike
+    // Mínimo 2 velas de enfriamiento M1 hacia la zona de recarga
     const consecutiveGreenM1 = this.getConsecutiveGreenM1(m1Candles);
     const consecutiveRedM1 = this.getConsecutiveRedM1(m1Candles);
-    const minGreenRequired = 3;
+    const minGreenRequired = 2;
     const greenOk = isBoom
       ? consecutiveRedM1 >= minGreenRequired
       : consecutiveGreenM1 >= minGreenRequired;
@@ -429,24 +428,13 @@ export class CrashIaStrategyService {
       m5Viability.reason = retestInfo.reason;
     }
 
-    const canSell =
-      !isBoom &&
-      Boolean(vCandidate) &&
-      status === 'EN_ZONA_50' &&
-      trendOk &&
-      rsiOk &&
-      greenOk &&
-      velaAmigaOk &&
-      m5Viability.isViable;
-    const canBuy =
-      isBoom &&
-      Boolean(vCandidate) &&
-      status === 'EN_ZONA_50' &&
-      trendOk &&
-      rsiOk &&
-      greenOk &&
-      velaAmigaOk &&
-      m5Viability.isViable;
+    const inEntryZone =
+      status === 'EN_ZONA_50' ||
+      status === 'EN_BASE_CAJA' ||
+      (activeOrderBlock && (activeOrderBlock.inZone || activeOrderBlock.distToPrice <= m5CandleHeight * 2.0));
+
+    const canSell = Boolean(!isBoom && inEntryZone && trendOk && rsiOk && greenOk && m5Viability.isViable);
+    const canBuy = Boolean(isBoom && inEntryZone && trendOk && rsiOk && greenOk && m5Viability.isViable);
 
     // Solo mostrar badge VERDE (success) cuando TODOS los filtros institucionales y el OB M5 están confirmados
     if (canSell || canBuy) {
@@ -590,40 +578,55 @@ export class CrashIaStrategyService {
 
     const radar: SpikeRadarEntry[] = [];
     for (const ev of all) {
-      const hasSignal = ev.canSell || ev.canBuy;
-      if (!hasSignal) continue;
-
+      const isBoom = ev.marketType === 'BOOM';
       const ob = ev.activeOrderBlock;
-      const obOk = ob && (ob.status === 'FRESCO' || ob.status === 'EN_ZONA') && ob.inZone;
-      if (!obOk) continue;
+      if (!ob || (ob.status !== 'FRESCO' && ob.status !== 'EN_ZONA')) continue;
 
-      if (!ev.vCandidate) continue;
-      if (!ev.m5Viability?.isViable) continue;
-      if (!ev.filters?.velaAmigaOk) continue;
-      if (!ev.filters?.greenOk) continue;
-      if (!ev.filters?.trendOk) continue;
-
-      // Precio debe estar dentro o máximo 1.5 alturas de vela M5 del OB
-      const proximity = ob.distToPrice <= ev.m5CandleHeight * 1.5;
+      // 1. Proximidad a la zona del Order Block (dentro de la zona o detección anticipada de radar)
+      const proximity = ob.inZone || ob.distToPrice <= ev.m5CandleHeight * 3.5;
       if (!proximity) continue;
 
-      // RSI no sobreextendido
+      // 2. Velas de enfriamiento M1 (evitar entrar en la mecha inmediata del spike sin retroceso)
+      const coolingOk = isBoom
+        ? ev.filters.consecutiveRedM1 >= 2
+        : ev.filters.consecutiveGreenM1 >= 2;
+      if (!coolingOk) continue;
+
+      // 3. Tendencia general compatible en M15
+      const trendOk = isBoom
+        ? (ev.filters.trendM15 === 'ALCISTA' || ev.currentPrice >= ev.filters.ema50_M15 * 0.998)
+        : (ev.filters.trendM15 === 'BAJISTA' || ev.currentPrice <= ev.filters.ema50_M15 * 1.002);
+      if (!trendOk) continue;
+
+      // 4. RSI saludable y con margen para el movimiento del spike (sin contradicciones)
       const rsi = ev.filters.rsi_M5;
-      if (ev.marketType === 'CRASH' && rsi >= 55) continue;
-      if (ev.marketType === 'BOOM'  && rsi <= 45) continue;
+      const rsiOk = isBoom
+        ? (rsi >= 22 && rsi <= 72)
+        : (rsi >= 28 && rsi <= 78);
+      if (!rsiOk) continue;
 
-      // Calcular score de confianza (0–100)
-      let score = 60;
-      if (ob.status === 'FRESCO') score += 15;
+      // 5. Vela Amiga H1
+      if (!ev.filters.velaAmigaOk) continue;
+
+      // 6. Calcular score de confianza (65 a 100)
+      let score = 65;
+      if (ob.status === 'FRESCO') score += 10;
       if (ob.inZone) score += 10;
-      if (ev.marketType === 'CRASH' && rsi < 45) score += 5;
-      if (ev.marketType === 'BOOM'  && rsi > 55) score += 5;
-      if (ob.distToPrice <= ev.m5CandleHeight * 0.5) score += 10; // precio dentro del OB exacto
+      if (ob.distToPrice <= ev.m5CandleHeight * 1.0) score += 5;
+      if (ev.vCandidate) score += 5;
+      if (ev.m5Viability?.isViable) score += 5;
+      if (isBoom && rsi >= 35 && rsi <= 60) score += 5;
+      if (!isBoom && rsi >= 40 && rsi <= 65) score += 5;
 
-      const risk = Math.max(Math.abs(ev.entryLevel50 - ev.stopLossPrice), ev.m5CandleHeight * 0.6);
-      const takeProfitPrice = ev.marketType === 'CRASH'
-        ? Number((ev.entryLevel50 - 3.0 * risk).toFixed(2))
-        : Number((ev.entryLevel50 + 3.0 * risk).toFixed(2));
+      const entryPrice = ob.mid50 || ev.entryLevel50;
+      const stopLossPrice = isBoom
+        ? Math.min(ob.low - ev.m5CandleHeight * 0.4, ev.currentPrice - ev.m5CandleHeight * 0.4)
+        : Math.max(ob.high + ev.m5CandleHeight * 0.4, ev.currentPrice + ev.m5CandleHeight * 0.4);
+
+      const actualRisk = Math.max(Math.abs(entryPrice - stopLossPrice), ev.m5CandleHeight * 0.5);
+      const takeProfitPrice = isBoom
+        ? Number((entryPrice + 3.0 * actualRisk).toFixed(2))
+        : Number((entryPrice - 3.0 * actualRisk).toFixed(2));
       const riskReward = 3.0;
 
       radar.push({
@@ -632,8 +635,8 @@ export class CrashIaStrategyService {
         marketType:     ev.marketType,
         operationType:  ev.operationType,
         currentPrice:   ev.currentPrice,
-        entryLevel50:   ev.entryLevel50,
-        stopLossPrice:  ev.stopLossPrice,
+        entryLevel50:   parseFloat(entryPrice.toFixed(3)),
+        stopLossPrice:  parseFloat(stopLossPrice.toFixed(3)),
         takeProfitPrice,
         riskReward,
         h1LinePrice:    ev.h1LinePrice,
@@ -646,12 +649,11 @@ export class CrashIaStrategyService {
         m5ViabilityReason: ev.m5Viability.reason,
         velaAmigaMsg:   ev.filters.velaAmigaMsg,
         score:          Math.min(100, score),
-        canSell:        ev.canSell,
-        canBuy:         ev.canBuy,
+        canSell:        !isBoom,
+        canBuy:         isBoom,
       });
     }
 
-    // Ordenar por score descendente
     return radar.sort((a, b) => b.score - a.score);
   }
 
@@ -1100,16 +1102,11 @@ export class CrashIaStrategyService {
         ((isBoom ? currentPrice - targetReactionPrice : targetReactionPrice - currentPrice)).toFixed(3),
       );
 
-      // En Crash: vender desde el 50% (mid50) hasta el techo del OB sin superarlo.
-      // En Boom: comprar desde el 50% (mid50) hasta el piso del OB sin perforarlo.
+      // En Crash: vender en zona del OB (mid50 a techo y holgura de reacción)
+      // En Boom: comprar en zona del OB (mid50 a piso y holgura de reacción)
       const inOptimalEntryBand = isBoom
-        ? currentPrice <= activeOB.mid50 + tolerance && currentPrice >= activeOB.low
-        : currentPrice >= activeOB.mid50 - tolerance && currentPrice <= activeOB.high;
-
-      // Además, el OB debe confluir con la mitad superior (Crash) / inferior (Boom) de la Caja V/H1
-      const alignedWithVBox = isBoom
-        ? currentPrice <= entryLevel50 + m5CandleHeight * 0.25 && currentPrice >= boxFloor - m5CandleHeight * 0.5
-        : currentPrice >= entryLevel50 - m5CandleHeight * 0.25 && currentPrice <= boxCeiling + m5CandleHeight * 0.5;
+        ? currentPrice <= activeOB.high + tolerance && currentPrice >= activeOB.low - tolerance
+        : currentPrice >= activeOB.low - tolerance && currentPrice <= activeOB.high + tolerance;
 
       const rejectionOrDeceleration = this.hasOrderBlockRejectionOrDeceleration(
         m5Candles,
@@ -1118,17 +1115,15 @@ export class CrashIaStrategyService {
         activeOB.high,
       );
 
-      const isViable = inOptimalEntryBand && alignedWithVBox && rejectionOrDeceleration;
+      const isViable = inOptimalEntryBand && (rejectionOrDeceleration || activeOB.inZone || activeOB.distToPrice <= m5CandleHeight * 1.5);
 
       let reason = '';
       if (!inOptimalEntryBand) {
-        reason = `Esperar llegada al 50% del Order Block Fresco (${activeOB.mid50}; rango ${activeOB.low} - ${activeOB.high})`;
-      } else if (!alignedWithVBox) {
-        reason = `Order Block M5 (${activeOB.mid50}) fuera de confluencia con el 50% de la Caja ${isBoom ? 'Λ' : 'V'} (${entryLevel50.toFixed(2)})`;
-      } else if (!rejectionOrDeceleration) {
+        reason = `Esperar llegada al Order Block Fresco (${activeOB.mid50}; rango ${activeOB.low} - ${activeOB.high})`;
+      } else if (!rejectionOrDeceleration && !activeOB.inZone && activeOB.distToPrice > m5CandleHeight * 0.8) {
         reason = `En zona OB (${activeOB.mid50}), esperando mecha de rechazo o desaceleración M5 antes de entrar`;
       } else {
-        reason = `Confluencia Sniper M5: Primer toque en 50% de Order Block Fresco (${activeOB.mid50}) + Caja ${isBoom ? 'Λ' : 'V'}`;
+        reason = `Confluencia Sniper M5: Toque en Order Block Fresco (${activeOB.mid50}) + Zona de Reacción`;
       }
 
       return {
@@ -1983,26 +1978,24 @@ export class CrashIaStrategyService {
     if (!isBoom) {
       const isPrevRed = prevClose < prevOpen;
       if (!isPrevRed) {
+        const prevBody = prevClose - prevOpen;
+        const currentH1Height = Math.abs(Number(currentH1.high) - Number(currentH1.low)) || 1.0;
+        if (prevBody > currentH1Height * 3.0 && Number(currentH1.close) > Number(prevH1.high)) {
+          return { velaAmigaOk: false, velaAmigaMsg: 'Bloqueado: Impulso alcista H1 fuerte en contra' };
+        }
         return { velaAmigaOk: true, velaAmigaMsg: 'Vela H1 previa no fue bajista' };
       }
-
-      const currentBase = Math.min(Number(currentH1.open), Number(currentH1.close));
-      if (prevClose < currentBase) {
-        return { velaAmigaOk: false, velaAmigaMsg: 'Bloqueado: Roja previa H1 cerró más abajo' };
-      }
-
       return { velaAmigaOk: true, velaAmigaMsg: 'Vela Amiga H1 Aprobada' };
     } else {
       const isPrevGreen = prevClose > prevOpen;
       if (!isPrevGreen) {
+        const prevBody = prevOpen - prevClose;
+        const currentH1Height = Math.abs(Number(currentH1.high) - Number(currentH1.low)) || 1.0;
+        if (prevBody > currentH1Height * 3.0 && Number(currentH1.close) < Number(prevH1.low)) {
+          return { velaAmigaOk: false, velaAmigaMsg: 'Bloqueado: Impulso bajista H1 fuerte en contra' };
+        }
         return { velaAmigaOk: true, velaAmigaMsg: 'Vela H1 previa en consolidación' };
       }
-
-      const currentCeiling = Math.max(Number(currentH1.open), Number(currentH1.close));
-      if (prevClose > currentCeiling) {
-        return { velaAmigaOk: false, velaAmigaMsg: 'Bloqueado: Verde previa H1 cerró por encima' };
-      }
-
       return { velaAmigaOk: true, velaAmigaMsg: 'Vela Amiga H1 Aprobada' };
     }
   }
