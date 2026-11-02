@@ -11,3 +11,4 @@ import { SmcSyntheticsService } from './smc-synthetics.service';
   exports: [SmcSyntheticsService],
 })
 export class SmcSyntheticsModule {}
+

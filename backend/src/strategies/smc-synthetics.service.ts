@@ -6,10 +6,27 @@ import { DerivWebsocketService } from '../deriv/deriv-websocket.service';
 export interface SyntheticSymbol {
   symbol: string;
   name: string;
-  category: 'STEP' | 'VOLATILITY' | 'JUMP';
+  category: 'METALS' | 'FOREX' | 'STEP' | 'VOLATILITY' | 'JUMP';
+}
+
+function getDecimals(symbol: string): number {
+  if (symbol.includes('EUR') || symbol.includes('GBPUSD') || symbol.includes('AUD')) return 5;
+  if (symbol.includes('JPY')) return 3;
+  if (symbol.includes('XAU')) return 2;
+  if (symbol.includes('XAG')) return 3;
+  if (symbol === 'stpRNG') return 1;
+  return 4;
 }
 
 export const SYNTHETIC_KNOWN_SYMBOLS: SyntheticSymbol[] = [
+  // Oro y Metales
+  { symbol: 'frxXAUUSD', name: 'Oro (XAU/USD)',        category: 'METALS' },
+  { symbol: 'frxXAGUSD', name: 'Plata (XAG/USD)',      category: 'METALS' },
+  // Forex con alta volatilidad / correlación
+  { symbol: 'frxGBPJPY', name: 'GBP/JPY',              category: 'FOREX' },
+  { symbol: 'frxGBPUSD', name: 'GBP/USD',              category: 'FOREX' },
+  { symbol: 'frxEURUSD', name: 'EUR/USD',              category: 'FOREX' },
+  { symbol: 'frxUSDJPY', name: 'USD/JPY',              category: 'FOREX' },
   // Step Index
   { symbol: 'stpRNG',   name: 'Step Index',           category: 'STEP' },
   // Volatility Indices (Estándar)
@@ -115,7 +132,7 @@ export interface SmcSyntheticConditions {
 export interface SmcSyntheticResult {
   symbol: string;
   name: string;
-  category: 'STEP' | 'VOLATILITY' | 'JUMP';
+  category: 'METALS' | 'FOREX' | 'STEP' | 'VOLATILITY' | 'JUMP';
   direction: 'BUY' | 'SELL';
   ready: boolean;
   score: number; // 0 - 6
@@ -549,19 +566,21 @@ export class SmcSyntheticsService {
       let stopLossPrice = 0;
       let takeProfitPrice = 0;
 
+      const decimals = getDecimals(sym.symbol);
       if (direction === 'BUY') {
         const zoneBottom = smcZone ? smcZone.bottom : currentPrice - 0.7 * atr;
-        stopLossPrice = Number((Math.min(entryPrice, zoneBottom) - 0.35 * atr).toFixed(4));
+        stopLossPrice = Number((Math.min(entryPrice, zoneBottom) - 0.35 * atr).toFixed(decimals));
         const risk = Math.max(Math.abs(entryPrice - stopLossPrice), 0.4 * atr);
         const targetHigh = Math.max(rangeHigh, entryPrice + 2.8 * risk);
-        takeProfitPrice = Number(targetHigh.toFixed(4));
+        takeProfitPrice = Number(targetHigh.toFixed(decimals));
       } else {
         const zoneTop = smcZone ? smcZone.top : currentPrice + 0.7 * atr;
-        stopLossPrice = Number((Math.max(entryPrice, zoneTop) + 0.35 * atr).toFixed(4));
+        stopLossPrice = Number((Math.max(entryPrice, zoneTop) + 0.35 * atr).toFixed(decimals));
         const risk = Math.max(Math.abs(stopLossPrice - entryPrice), 0.4 * atr);
         const targetLow = Math.min(rangeLow, entryPrice - 2.8 * risk);
-        takeProfitPrice = Number(targetLow.toFixed(4));
+        takeProfitPrice = Number(targetLow.toFixed(decimals));
       }
+      entryPrice = Number(entryPrice.toFixed(decimals));
 
       const risk = Math.abs(entryPrice - stopLossPrice);
       const reward = Math.abs(takeProfitPrice - entryPrice);

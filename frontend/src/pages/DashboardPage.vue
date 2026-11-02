@@ -523,25 +523,26 @@
 
 
     <!-- ───────────────────────────────────────────────────────────────
-         SECCIÓN 1.8 · SMC SINTÉTICOS — Step Index, Volatility & Jump
-         Estrategia SMC pura sin spikes · Compras y Ventas bidireccionales
+         SECCIÓN 1.8 · SMC PRO — Sintéticos, Oro (XAU/USD) & Forex
+         Estrategia SMC pura: Metales, Forex y Sintéticos · Compras y Ventas
     ──────────────────────────────────────────────────────────────── -->
     <div class="section-header synth-section-header q-mb-md row items-center justify-between">
       <div class="row items-center q-gutter-sm">
         <span class="live-pulse-dot synth-pulse" :class="{ active: synthReadyList.length > 0 }" />
         <div>
           <div class="synth-title row items-center q-gutter-xs">
-            <span>⚡ SMC Sintéticos · Step Index, Volatility &amp; Jump</span>
-            <span class="synth-tag">BUY &amp; SELL</span>
+            <span>⚡ SMC Pro · Sintéticos, Oro (XAU/USD) &amp; Forex</span>
+            <span class="synth-tag">ORO · FOREX · SINTÉTICOS</span>
             <q-badge
               v-if="synthReadyList.length"
-              color="indigo-8"
+              color="amber-9"
+              text-color="black"
               :label="`${synthReadyList.length} LISTOS`"
-              class="q-ml-xs"
+              class="q-ml-xs text-weight-bold"
             />
           </div>
           <div class="section-sub">
-            Estrategia SMC institucional pura sin spikes: tendencia HTF H1 · Order Blocks/FVG · Descuento/Premium · CHoCH M5 · Ratio R:B ≥ 1:2.5
+            Estrategia SMC institucional pura: Oro (XAU/USD), Forex correlacionado, Step Index, Volatilities y Jumps · Compras y Ventas · SL ceñido y TP con R:B
             <span v-if="lastSynthUpdate" class="q-ml-xs">
               · actualizado {{ lastSynthUpdateTime }}
             </span>
@@ -568,7 +569,7 @@
           label="VER SCANNER COMPLETO"
           to="/smc-synthetics"
         >
-          <q-tooltip>Abrir scanner y gráficos de los 16 índices sintéticos</q-tooltip>
+          <q-tooltip>Abrir scanner y gráficos interactivos con Oro, Forex y Sintéticos</q-tooltip>
         </q-btn>
       </div>
     </div>
@@ -593,7 +594,7 @@
       </q-tabs>
 
       <span v-if="activeSynthTab === 'history'" class="text-caption text-slate-500">
-        Señales de compra y venta detectadas en índices sintéticos en las últimas 24h, ordenadas por tiempo.
+        Señales de compra y venta detectadas en Oro, Forex y Sintéticos en las últimas 24h, ordenadas por tiempo.
       </span>
     </div>
 
@@ -611,10 +612,10 @@
       >
         <q-icon name="auto_graph" size="36px" color="indigo-4" />
         <div class="text-subtitle2 text-weight-bold text-slate-500 q-mt-sm">
-          Sin índices sintéticos listos en este momento
+          Sin señales SMC Pro listas en este momento
         </div>
         <div class="text-caption text-slate-400 q-mt-xs">
-          Los 16 índices Step, Volatility y Jump están siendo monitoreados continuamente para compras y ventas.
+          Oro (XAU/USD), pares de Forex, Step, Volatility y Jump están siendo monitoreados continuamente para compras y ventas con SL ceñido.
         </div>
       </div>
 
@@ -635,6 +636,14 @@
                 <div class="row items-center q-gutter-xs">
                   <span style="font-size:16px;">{{ item.direction === 'BUY' ? '📈' : '📉' }}</span>
                   <span class="smc-compact-symbol">{{ item.name }}</span>
+                  <q-badge
+                    v-if="item.category"
+                    dense
+                    :color="getCategoryColor(item.category)"
+                    :text-color="item.category === 'METALS' ? 'black' : 'white'"
+                    :label="item.category"
+                    class="text-weight-bold"
+                  />
                   <q-badge
                     :color="item.direction === 'BUY' ? 'green-8' : 'red-8'"
                     :label="item.direction"
@@ -689,10 +698,10 @@
       <div v-if="!synthHistoryList.length" class="radar-empty q-pa-xl text-center q-mb-xl">
         <q-icon name="history_toggle_drop_down" size="44px" color="indigo-4" />
         <div class="text-subtitle1 text-weight-bold text-slate-700 q-mt-sm">
-          Sin señales SMC Sintéticos acumuladas en las últimas 24 horas
+          Sin señales SMC Pro acumuladas en las últimas 24 horas
         </div>
         <div class="text-caption text-slate-500 q-mt-xs">
-          Cada vez que Step Index, Volatilities o Jumps cumplan condiciones de entrada, quedarán archivados aquí ordenados de más reciente a más antiguo por 24h.
+          Cada vez que Oro, Forex, Step Index, Volatilities o Jumps cumplan condiciones de entrada, quedarán archivados aquí ordenados de más reciente a más antiguo por 24h.
         </div>
       </div>
 
@@ -722,6 +731,14 @@
                   <div class="row items-center q-gutter-xs">
                     <span style="font-size:16px;">{{ item.direction === 'BUY' ? '📈' : '📉' }}</span>
                     <span class="smc-compact-symbol">{{ item.name }}</span>
+                    <q-badge
+                      v-if="item.category"
+                      dense
+                      :color="getCategoryColor(item.category)"
+                      :text-color="item.category === 'METALS' ? 'black' : 'white'"
+                      :label="item.category"
+                      class="text-weight-bold"
+                    />
                     <q-badge :color="item.direction === 'BUY' ? 'green-8' : 'red-8'" :label="item.direction" class="text-weight-bold" />
                   </div>
                   <div class="row items-center q-gutter-xs">
@@ -1268,6 +1285,17 @@ async function loadSynthScanner() {
   }
 }
 
+
+function getCategoryColor(cat) {
+  switch (cat) {
+    case 'METALS': return 'amber-9';
+    case 'FOREX': return 'blue-7';
+    case 'STEP': return 'cyan-7';
+    case 'VOLATILITY': return 'purple-7';
+    case 'JUMP': return 'deep-orange-7';
+    default: return 'indigo-7';
+  }
+}
 
 // ─── Wey Signals (Motor Sniper) ──────────────────────────────────────────────
 const WEY_HISTORY_KEY     = 'wey_signals_history_24h';

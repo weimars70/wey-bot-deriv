@@ -209,11 +209,11 @@
         </q-item>
 
         <q-item clickable to="/smc-synthetics">
-          <q-item-section avatar><q-icon name="auto_graph" color="indigo-7" /></q-item-section>
+          <q-item-section avatar><q-icon name="auto_graph" color="amber-8" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
-              <span>SMC Sintéticos</span>
-              <q-badge color="indigo-7" label="STEP · VOL · JUMP" class="text-weight-bold" />
+              <span>SMC Pro · Oro &amp; Sintéticos</span>
+              <q-badge color="amber-9" text-color="black" label="ORO · FOREX · SINTÉTICOS" class="text-weight-bold" />
             </div>
           </q-item-section>
         </q-item>

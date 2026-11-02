@@ -7,9 +7,9 @@
         <div>
           <div class="row items-center q-gutter-xs">
             <span class="page-title text-h6 text-weight-bolder text-slate-900">
-              ⚡ SMC Sintéticos · Scanner Institucional
+              ⚡ SMC Pro · Sintéticos, Oro (XAU/USD) &amp; Forex
             </span>
-            <q-badge color="indigo-7" label="STEP · VOLATILITY · JUMP" class="text-weight-bold" />
+            <q-badge color="amber-9" text-color="black" label="ORO · FOREX · SINTÉTICOS" class="text-weight-bold" />
             <q-badge
               v-if="readyList.length"
               color="green-8"
@@ -18,7 +18,7 @@
             />
           </div>
           <div class="text-caption text-slate-500 q-mt-xs">
-            Estrategia SMC pura sin spikes · Detección bidireccional (BUY / SELL) según estructura de mercado · POI (OB/FVG) · Descuento/Premium · CHoCH M5
+            Estrategia SMC institucional pura: Oro (XAU/USD), pares de Forex correlacionados, Step Index, Volatility y Jump · Detección bidireccional (BUY / SELL) según estructura de mercado · POI (OB/FVG) · Descuento/Premium · CHoCH M5 · SL Ceñido y TP
             <span v-if="lastUpdate" class="q-ml-xs text-weight-medium">
               · Actualizado: {{ lastUpdateTime }}
             </span>
@@ -61,6 +61,12 @@
         <q-tab name="ALL" label="Todos">
           <q-badge color="slate-6" :label="results.length" class="q-ml-xs text-weight-bold" />
         </q-tab>
+        <q-tab name="METALS" label="Oro &amp; Metales">
+          <q-badge color="amber-9" text-color="black" :label="countByCategory('METALS')" class="q-ml-xs text-weight-bold" />
+        </q-tab>
+        <q-tab name="FOREX" label="Forex">
+          <q-badge color="blue-7" :label="countByCategory('FOREX')" class="q-ml-xs text-weight-bold" />
+        </q-tab>
         <q-tab name="STEP" label="Step Index">
           <q-badge color="cyan-7" :label="countByCategory('STEP')" class="q-ml-xs text-weight-bold" />
         </q-tab>
@@ -68,7 +74,7 @@
           <q-badge color="purple-7" :label="countByCategory('VOLATILITY')" class="q-ml-xs text-weight-bold" />
         </q-tab>
         <q-tab name="JUMP" label="Jump Indices">
-          <q-badge color="amber-8" :label="countByCategory('JUMP')" class="q-ml-xs text-weight-bold" />
+          <q-badge color="deep-orange-7" :label="countByCategory('JUMP')" class="q-ml-xs text-weight-bold" />
         </q-tab>
       </q-tabs>
 
@@ -115,7 +121,17 @@
                   <span style="font-size: 16px;">{{ item.direction === 'BUY' ? '📈' : '📉' }}</span>
                   <span class="text-subtitle2 text-weight-bolder text-slate-900">{{ item.name }}</span>
                 </div>
-                <div class="text-caption text-slate-400 font-mono">{{ item.symbol }} · {{ item.category }}</div>
+                <div class="text-caption text-slate-400 font-mono row items-center q-gutter-xs">
+                  <span>{{ item.symbol }}</span>
+                  <span>·</span>
+                  <q-badge
+                    dense
+                    :color="getCategoryColor(item.category)"
+                    :text-color="item.category === 'METALS' ? 'black' : 'white'"
+                    :label="item.category"
+                    class="text-weight-bold"
+                  />
+                </div>
               </div>
 
               <div class="text-right">
@@ -329,6 +345,17 @@ function countByCategory(cat) {
   return results.value.filter((r) => r.category === cat).length;
 }
 
+function getCategoryColor(cat) {
+  switch (cat) {
+    case 'METALS': return 'amber-9';
+    case 'FOREX': return 'blue-7';
+    case 'STEP': return 'cyan-7';
+    case 'VOLATILITY': return 'purple-7';
+    case 'JUMP': return 'deep-orange-7';
+    default: return 'indigo-7';
+  }
+}
+
 async function loadScanner() {
   loading.value = true;
   try {
@@ -463,3 +490,4 @@ onUnmounted(() => {
   padding-top: 16px;
 }
 </style>
+
