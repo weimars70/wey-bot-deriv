@@ -22,11 +22,13 @@ input double   MinProfitThresholdUSD   = 15.00;          // Ganancia minima acum
 input int      PollIntervalMs          = 400;            // Frecuencia de sincronizacion (milisegundos)
 input int      SlippagePoints          = 20;             // Desviacion maxima permitida (puntos)
 input int      M5XHistoryCandles       = 9000;           // Historial M5 exportado por indice (~31 dias)
-input int      NoSpikeTimeoutM1Bars    = 10;             // Cerrar tras esta cantidad de velas M1 si no aparece un spike favorable
+input int      NoSpikeTimeoutM1Bars    = 8;              // SL maximo en Crash/Boom: 8 minutos (8 velas M1)
 
 input group "=== Configuracion de Stop Loss Monetario ==="
-input double   MaxLossDefaultUSD       = 5.00;           // Stop Loss monetario por defecto en USD (ej: 5.00 USD)
+input double   MaxLossDefaultUSD       = 5.00;           // Stop Loss monetario por defecto en USD para Crash/Boom (5.00 USD)
 input double   MaxLossCrash600USD      = 8.00;           // Stop Loss monetario para Crash 600 en USD (8.00 USD)
+input double   MaxLossSyntheticsUSD    = 7.00;           // Stop Loss monetario para Step, Jump y Volatility (7.00 USD)
+input double   MaxLossForexUSD         = 8.00;           // Stop Loss monetario para Forex y Metales (8.00 USD)
 
 //--- Objeto de trading nativo
 CTrade trade;
@@ -39,10 +41,35 @@ int gvCleanupCounter = 0;
 int m5XExportCounter = 0;
 
 //+------------------------------------------------------------------+
+//| Clasificar categoria del simbolo:                                |
+//| 0 = CRASH_BOOM                                                   |
+//| 1 = SYNTHETIC_OTHER (Step, Jump, Volatility)                     |
+//| 2 = FOREX_METALS (XAUUSD, XAGUSD, pares Forex)                   |
+//+------------------------------------------------------------------+
+int GetSymbolCategory(string sym)
+{
+   string up = sym;
+   StringToUpper(up);
+   if(StringFind(up, "CRASH") >= 0 || StringFind(up, "BOOM") >= 0)
+      return 0;
+   if(StringFind(up, "XAU") >= 0 || StringFind(up, "XAG") >= 0 ||
+      StringFind(up, "GOLD") >= 0 || StringFind(up, "SILVER") >= 0 ||
+      StringFind(up, "EURUSD") >= 0 || StringFind(up, "GBPUSD") >= 0 ||
+      StringFind(up, "GBPJPY") >= 0 || StringFind(up, "USDJPY") >= 0 ||
+      StringFind(up, "FRX") >= 0)
+      return 2;
+   return 1;
+}
+
+//+------------------------------------------------------------------+
 //| Obtener Stop Loss maximo en USD segun el simbolo                 |
 //+------------------------------------------------------------------+
 double GetMaxLossForSymbolUSD(string sym)
 {
+   int cat = GetSymbolCategory(sym);
+   if(cat == 2) return MaxLossForexUSD;      // 8 USD para Forex/Metales
+   if(cat == 1) return MaxLossSyntheticsUSD; // 7 USD para Step, Jump, Volatility
+
    string up = sym;
    StringToUpper(up);
    if(StringFind(up, "600") >= 0 && StringFind(up, "CRASH") >= 0)
@@ -87,7 +114,7 @@ bool HasFavorableM1SpikeSince(string sym, datetime entryTime, bool isBuy)
 }
 
 //+------------------------------------------------------------------+
-//| Local safety: 10 M1 bars without a favorable spike closes trade  |
+//| Local safety: 8 M1 bars (8 min) without profit on Crash/Boom     |
 //+------------------------------------------------------------------+
 void ManageNoSpikeTimeout()
 {
@@ -100,27 +127,31 @@ void ManageNoSpikeTimeout()
       if(posMagic != BridgeMagicNumber && !ProtectAllPositions) continue;
 
       string sym = PositionGetString(POSITION_SYMBOL);
+      // El SL por tiempo de 8 minutos aplica exclusivamente a Crash y Boom
+      if(GetSymbolCategory(sym) != 0) continue;
+
       datetime entryTime = (datetime)PositionGetInteger(POSITION_TIME);
       bool isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      double curProfit = PositionGetDouble(POSITION_PROFIT);
       string spikeGV = "DAPP_SPIKE_" + (string)ticket;
 
-      if(!GlobalVariableCheck(spikeGV) && HasFavorableM1SpikeSince(sym, entryTime, isBuy))
+      if(!GlobalVariableCheck(spikeGV) && (HasFavorableM1SpikeSince(sym, entryTime, isBuy) || curProfit >= 0.50))
       {
          GlobalVariableSet(spikeGV, 1.0);
-         Print("[DerivApp Bridge] Favorable M1 spike detected for ticket #", ticket,
-               ". Enabling ", DoubleToString(ProfitProtectionPercent, 0), "% profit protection.");
+         Print("[DerivApp Bridge] Spike/Profit detected for Crash/Boom ticket #", ticket,
+               ". Enabling 60% trailing stop protection.");
       }
 
-      if(GlobalVariableCheck(spikeGV)) continue;
+      if(curProfit > 0.0) continue;
 
+      int elapsedSec = (int)(TimeCurrent() - entryTime);
       int barsSinceEntry = iBarShift(sym, PERIOD_M1, entryTime, false);
-      if(barsSinceEntry >= NoSpikeTimeoutM1Bars)
+      if(barsSinceEntry >= 8 || elapsedSec >= 480)
       {
-         Print("[DerivApp Bridge] Closing ticket #", ticket, " after ", barsSinceEntry,
-               " M1 bars without a favorable spike.");
+         Print("[DerivApp Bridge] Closing Crash/Boom ticket #", ticket, " after 8 minutes without profit.");
          if(trade.PositionClose(ticket))
          {
-            WriteFeedback("timeout_no_spike", "", "CLOSED", ticket, "Closed after 10 M1 bars without favorable spike");
+            WriteFeedback("timeout_8min_crash_boom", "", "CLOSED", ticket, "Closed after 8 minutes max SL on Crash/Boom");
             GlobalVariableDel("DAPP_MAXP_" + (string)ticket);
          }
       }
@@ -157,31 +188,29 @@ void CheckMonetaryStopLoss()
 }
 
 //+------------------------------------------------------------------+
-//| Proteger el 70% (configurable) de la ganancia maxima alcanzada    |
+//| Trailing Stop por categoria (sin marcar SL ni TP en MT5):        |
+//| - Crash/Boom (cat 0): 60% siempre que este en profit             |
+//| - Step/Jump/Volatility (cat 1): 50% siempre que este en profit   |
+//| - Forex/Metales (cat 2): 60% cuando profit > 8 USD               |
 //+------------------------------------------------------------------+
 void ProtectProfitTarget()
 {
-   double protectRatio = ProfitProtectionPercent / 100.0;
-   if(protectRatio <= 0.05 || protectRatio > 1.0) protectRatio = 0.70;
-   
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket <= 0) continue;
       
       // REGLA CRITICA: SOLO gestionar operaciones puestas por el bot (BridgeMagicNumber).
-      // Las operaciones manuales (magic != BridgeMagicNumber) NUNCA se tocan ni se cierran.
       ulong posMagic = PositionGetInteger(POSITION_MAGIC);
       if(!ProtectAllPositions && posMagic != BridgeMagicNumber)
       {
-         continue; // Omitir completamente operaciones manuales
+         continue;
       }
       
-      // All bridge entries use the same 10 M1-bar timeout and spike protection.
-      
-       double profit = PositionGetDouble(POSITION_PROFIT);
-       string gvName = "DAPP_MAXP_" + (string)ticket;
-       bool hasFavorableSpike = GlobalVariableCheck("DAPP_SPIKE_" + (string)ticket);
+      string posSym = PositionGetString(POSITION_SYMBOL);
+      int cat = GetSymbolCategory(posSym);
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      string gvName = "DAPP_MAXP_" + (string)ticket;
       
       double maxProf = 0.0;
       if(GlobalVariableCheck(gvName))
@@ -196,51 +225,57 @@ void ProtectProfitTarget()
          GlobalVariableSet(gvName, maxProf);
       }
       
-      // REGLA CRITICA: Solo el EA activa trailing si el pico fue AL MENOS MinProfitThresholdUSD ($15 USD).
-      // Por debajo de $15 USD, el cierre es responsabilidad del backend (logica de 5 min post-spike con umbral $5 USD).
-      // Esto evita que el EA cierre prematuramente spikes normales que el backend necesita gestionar.
-       double protectionStart = hasFavorableSpike ? 0.01 : MinProfitThresholdUSD;
-       if(maxProf >= protectionStart)
+      bool shouldCheckTrailing = false;
+      double ratio = 0.60;
+      
+      if(cat == 0)
       {
-         double floorProfit = NormalizeDouble(maxProf * protectRatio, 2);
-         
-         // Si el profit retrocedio hasta o por debajo del piso protegido (asegurando el 70%):
+         // Crash y Boom: siempre que este en profit, trailing stop al 60%
+         if(maxProf >= 0.50)
+         {
+            shouldCheckTrailing = true;
+            ratio = 0.60;
+         }
+      }
+      else if(cat == 1)
+      {
+         // Step, Jump, Volatility: si esta en profit, asegurar el 50% si no llega al TP final
+         if(maxProf >= 0.50)
+         {
+            shouldCheckTrailing = true;
+            ratio = 0.50;
+         }
+      }
+      else if(cat == 2)
+      {
+         // Forex y Metales: asegurar el 60% cuando este en profit mayor a 8 USD
+         if(maxProf > 8.00)
+         {
+            shouldCheckTrailing = true;
+            ratio = 0.60;
+         }
+      }
+      
+      if(shouldCheckTrailing)
+      {
+         double floorProfit = NormalizeDouble(maxProf * ratio, 2);
          if(profit <= floorProfit)
          {
-            Print("🛡️ [DerivApp Bridge] ¡CIERRE PROTECCIÓN ", DoubleToString(ProfitProtectionPercent, 0), "% PROFIT! Ticket #", ticket,
-                  " (Magic: ", posMagic, ")",
+            Print("🛡️ [DerivApp Bridge] ¡TRAILING STOP ", DoubleToString(ratio * 100.0, 0), "% ACTIVADO! ", posSym,
+                  " Ticket #", ticket,
                   " | Pico máx: +$", DoubleToString(maxProf, 2),
-                  " -> Retroceso actual: +$", DoubleToString(profit, 2),
-                  " | Piso protegido (", DoubleToString(ProfitProtectionPercent, 0), "%): +$", DoubleToString(floorProfit, 2));
+                  " -> Actual: +$", DoubleToString(profit, 2),
+                  " | Piso asegurado: +$", DoubleToString(floorProfit, 2));
                   
             if(trade.PositionClose(ticket))
             {
-               Print("✅ [DerivApp Bridge] Posicion #", ticket, " cerrada con exito asegurando el ", DoubleToString(ProfitProtectionPercent, 0), "% de ganancia (pico >= $", DoubleToString(MinProfitThresholdUSD, 2), " USD).");
+               Print("✅ [DerivApp Bridge] Posicion #", ticket, " cerrada asegurando el ", DoubleToString(ratio * 100.0, 0), "% del profit.");
                GlobalVariableDel(gvName);
             }
             else
             {
                Print("❌ [DerivApp Bridge] Error cerrando posicion #", ticket, " RetCode: ", trade.ResultRetcode());
             }
-         }
-      }
-       else if(hasFavorableSpike && maxProf >= 1.50 && profit <= 0.00)
-      {
-         // El trade tuvo algun pico de spike menor a $15 USD. Se dejo correr y el precio regreso al punto de inicio.
-         // El backend deberia haberlo cerrado antes por la regla de breakeven post-spike.
-         // Este bloque del EA es de seguridad para cuando el backend no alcanza a reaccionar.
-         Print("🛡️ [DerivApp Bridge] ¡SALIDA EN PUNTO DE INICIO (BREAKEVEN) - Seguridad EA! Ticket #", ticket,
-               " | Pico max fue +$", DoubleToString(maxProf, 2), " (< $", DoubleToString(MinProfitThresholdUSD, 2), " USD)",
-               " | Retroceso al precio de entrada (Profit: $", DoubleToString(profit, 2), "). Cerrando sin perdidas.");
-               
-         if(trade.PositionClose(ticket))
-         {
-            Print("✅ [DerivApp Bridge] Posicion #", ticket, " cerrada en punto de inicio con 0 perdidas.");
-            GlobalVariableDel(gvName);
-         }
-         else
-         {
-            Print("❌ [DerivApp Bridge] Error cerrando posicion #", ticket, " RetCode: ", trade.ResultRetcode());
          }
       }
    }
@@ -279,6 +314,36 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| Buscar un simbolo en la lista del broker si tiene sufijo/variante|
+//+------------------------------------------------------------------+
+string FindBrokerSymbolMatch(string target, string altTarget = "")
+{
+   if(SymbolSelect(target, true) && SymbolInfoDouble(target, SYMBOL_BID) > 0)
+      return target;
+   if(altTarget != "" && SymbolSelect(altTarget, true) && SymbolInfoDouble(altTarget, SYMBOL_BID) > 0)
+      return altTarget;
+
+   string tUp = target;
+   StringToUpper(tUp);
+   string aUp = altTarget;
+   StringToUpper(aUp);
+
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+   {
+      string name = SymbolName(i, false);
+      string nUp = name;
+      StringToUpper(nUp);
+      if(StringFind(nUp, tUp) >= 0 || (aUp != "" && StringFind(nUp, aUp) >= 0))
+      {
+         SymbolSelect(name, true);
+         return name;
+      }
+   }
+   return target;
+}
+
+//+------------------------------------------------------------------+
 //| Mapeo inteligente de simbolos entre Deriv Web API y Deriv MT5   |
 //+------------------------------------------------------------------+
 string NormalizeSymbol(string webSymbol)
@@ -290,7 +355,7 @@ string NormalizeSymbol(string webSymbol)
    if(StringFind(s, "CRASH1000") >= 0 || StringFind(s, "CRASH 1000") >= 0) return "Crash 1000 Index";
    if(StringFind(s, "BOOM1000") >= 0 || StringFind(s, "BOOM 1000") >= 0) return "Boom 1000 Index";
    
-   // 2. Índices de 3 dígitos
+   // 2. Índices de 3 dígitos Crash & Boom
    if(StringFind(s, "CRASH100") >= 0 || StringFind(s, "CRASH 100") >= 0) return "Crash 100 Index";
    if(StringFind(s, "CRASH200") >= 0 || StringFind(s, "CRASH 200") >= 0) return "Crash 200 Index";
    if(StringFind(s, "CRASH300") >= 0 || StringFind(s, "CRASH 300") >= 0) return "Crash 300 Index";
@@ -304,13 +369,44 @@ string NormalizeSymbol(string webSymbol)
    if(StringFind(s, "BOOM500") >= 0 || StringFind(s, "BOOM 500") >= 0) return "Boom 500 Index";
    if(StringFind(s, "BOOM600") >= 0 || StringFind(s, "BOOM 600") >= 0) return "Boom 600 Index";
    if(StringFind(s, "BOOM900") >= 0 || StringFind(s, "BOOM 900") >= 0) return "Boom 900 Index";
+
+   // 3. Step Index
+   if(StringFind(s, "STPRNG") >= 0 || StringFind(s, "STEP") >= 0) return FindBrokerSymbolMatch("Step Index", "Step 100 Index");
+
+   // 4. Volatility (1s) Indices
+   if(StringFind(s, "1HZ100V") >= 0 || (StringFind(s, "VOLATILITY 100") >= 0 && StringFind(s, "1S") >= 0)) return "Volatility 100 (1s) Index";
+   if(StringFind(s, "1HZ75V") >= 0  || (StringFind(s, "VOLATILITY 75") >= 0  && StringFind(s, "1S") >= 0)) return "Volatility 75 (1s) Index";
+   if(StringFind(s, "1HZ50V") >= 0  || (StringFind(s, "VOLATILITY 50") >= 0  && StringFind(s, "1S") >= 0)) return "Volatility 50 (1s) Index";
+   if(StringFind(s, "1HZ25V") >= 0  || (StringFind(s, "VOLATILITY 25") >= 0  && StringFind(s, "1S") >= 0)) return "Volatility 25 (1s) Index";
+   if(StringFind(s, "1HZ10V") >= 0  || (StringFind(s, "VOLATILITY 10") >= 0  && StringFind(s, "1S") >= 0)) return "Volatility 10 (1s) Index";
+
+   // 5. Volatility (Normal) Indices
+   if(s == "R_100" || StringFind(s, "VOLATILITY 100") >= 0) return "Volatility 100 Index";
+   if(s == "R_75"  || StringFind(s, "VOLATILITY 75") >= 0)  return "Volatility 75 Index";
+   if(s == "R_50"  || StringFind(s, "VOLATILITY 50") >= 0)  return "Volatility 50 Index";
+   if(s == "R_25"  || StringFind(s, "VOLATILITY 25") >= 0)  return "Volatility 25 Index";
+   if(s == "R_10"  || StringFind(s, "VOLATILITY 10") >= 0)  return "Volatility 10 Index";
+
+   // 6. Jump Indices
+   if(s == "JD100" || StringFind(s, "JUMP 100") >= 0) return "Jump 100 Index";
+   if(s == "JD75"  || StringFind(s, "JUMP 75") >= 0)  return "Jump 75 Index";
+   if(s == "JD50"  || StringFind(s, "JUMP 50") >= 0)  return "Jump 50 Index";
+   if(s == "JD25"  || StringFind(s, "JUMP 25") >= 0)  return "Jump 25 Index";
+   if(s == "JD10"  || StringFind(s, "JUMP 10") >= 0)  return "Jump 10 Index";
+
+   // 7. Oro, Plata y Pares de Forex
+   if(StringFind(s, "XAUUSD") >= 0) return FindBrokerSymbolMatch("XAUUSD", "GOLD");
+   if(StringFind(s, "XAGUSD") >= 0) return FindBrokerSymbolMatch("XAGUSD", "SILVER");
+   if(StringFind(s, "GBPJPY") >= 0) return FindBrokerSymbolMatch("GBPJPY");
+   if(StringFind(s, "GBPUSD") >= 0) return FindBrokerSymbolMatch("GBPUSD");
+   if(StringFind(s, "EURUSD") >= 0) return FindBrokerSymbolMatch("EURUSD");
+   if(StringFind(s, "USDJPY") >= 0) return FindBrokerSymbolMatch("USDJPY");
    
    return webSymbol;
 }
 
 //+------------------------------------------------------------------+
 //| Obtener lotaje seguro segun el activo                           |
-//| Regla: 0.50 en Crash 600, Crash 900 y Boom 1000; 1.00 en los demas|
 //+------------------------------------------------------------------+
 double GetSafeLot(string sym, double desiredLot)
 {
@@ -318,23 +414,34 @@ double GetSafeLot(string sym, double desiredLot)
    double maxLot = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
    double step   = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
    
-   if(minLot <= 0) minLot = 0.20;
+   if(minLot <= 0) minLot = 0.01;
    
    double lot = desiredLot;
    if(lot <= 0)
    {
-      string s = sym;
-      StringToUpper(s);
-      
-       if(StringFind(s, "CRASH 600") >= 0 || StringFind(s, "CRASH600") >= 0 ||
-          StringFind(s, "CRASH 900") >= 0 || StringFind(s, "CRASH900") >= 0 ||
-          StringFind(s, "BOOM 1000") >= 0 || StringFind(s, "BOOM1000") >= 0)
-       {
-          lot = 0.50;
-       }
-       else
-       {
-          lot = 1.00;
+      int cat = GetSymbolCategory(sym);
+      if(cat == 2)
+      {
+         lot = 0.05; // Forex y Metales
+      }
+      else if(cat == 1)
+      {
+         lot = 0.10; // Step, Jump, Volatility
+      }
+      else
+      {
+         string s = sym;
+         StringToUpper(s);
+         if(StringFind(s, "CRASH 600") >= 0 || StringFind(s, "CRASH600") >= 0 ||
+            StringFind(s, "CRASH 900") >= 0 || StringFind(s, "CRASH900") >= 0 ||
+            StringFind(s, "BOOM 1000") >= 0 || StringFind(s, "BOOM1000") >= 0)
+         {
+            lot = 0.50;
+         }
+         else
+         {
+            lot = 1.00;
+         }
       }
    }
    
@@ -344,6 +451,7 @@ double GetSafeLot(string sym, double desiredLot)
    if(step > 0)
    {
       lot = MathFloor(lot / step) * step;
+      if(lot < minLot) lot = minLot;
    }
    return NormalizeDouble(lot, 2);
 }
@@ -519,63 +627,23 @@ void ProcessSingleCommand(string cmdJson)
 
       double safeLot = GetSafeLot(mt5Sym, lot);
       bool success = false;
-      tp = 0.0; // Dejar correr la operación (sin TP fijo)
 
-      // Cada indice puede exigir un modo de llenado diferente. Forzar FOK
-      // globalmente puede rechazar una señal valida aunque haya cotizacion.
+      // REGLA EXPRESA DEL USUARIO: NUNCA marcar SL ni TP en las ordenes de MT5 (sl = 0.0, tp = 0.0).
+      // Todo el SL (8 min en Crash/Boom, 7 USD en Sinteticos, 8 USD en Forex) y Trailing Stop (60% / 50%)
+      // se gestiona internamente de forma virtual/oculta.
+      sl = 0.0;
+      tp = 0.0;
+
+      // Cada indice puede exigir un modo de llenado diferente.
       trade.SetTypeFillingBySymbol(mt5Sym);
 
-      double maxLoss = GetMaxLossForSymbolUSD(mt5Sym);
-      double slDist = (safeLot > 0.0) ? (maxLoss / safeLot) : 10.0;
-
-      // Si no viene SL o viene <= 0, o si el SL recibido quedó demasiado pegado por desfase (< 70% de la distancia monetaria),
-      // recalcular el precio de SL según el límite monetario exacto sobre la cotización en vivo actual
       if(dir == "BUY")
       {
-         if(sl <= 0.0 || (ask - sl) < (slDist * 0.70))
-            sl = ask - slDist;
+         success = trade.Buy(safeLot, mt5Sym, ask, 0.0, 0.0, comment);
       }
       else if(dir == "SELL")
       {
-         if(sl <= 0.0 || (sl - bid) < (slDist * 0.70))
-            sl = bid + slDist;
-      }
-
-      if(dir == "BUY")
-      {
-         if(sl > 0)
-         {
-            if(sl >= bid - minStopDist)
-               sl = NormalizeDouble(bid - minStopDist * 2, digits);
-            else
-               sl = NormalizeDouble(sl, digits);
-         }
-         
-         success = trade.Buy(safeLot, mt5Sym, ask, sl, 0.0, comment);
-         // Si fue rechazado por invalid stops (10016), reintentar sin SL inmediatamente
-         if(!success && sl > 0)
-         {
-            Print("⚠️ [DerivApp Bridge] Buy con SL falló en ", mt5Sym, " (", trade.ResultRetcodeDescription(), "). Reintentando sin SL en mercado directo...");
-            success = trade.Buy(safeLot, mt5Sym, ask, 0.0, 0.0, comment);
-         }
-      }
-      else if(dir == "SELL")
-      {
-         if(sl > 0)
-         {
-            if(sl <= ask + minStopDist)
-               sl = NormalizeDouble(ask + minStopDist * 2, digits);
-            else
-               sl = NormalizeDouble(sl, digits);
-         }
-         
-         success = trade.Sell(safeLot, mt5Sym, bid, sl, 0.0, comment);
-         // Si fue rechazado por invalid stops (10016), reintentar sin SL inmediatamente
-         if(!success && sl > 0)
-         {
-            Print("⚠️ [DerivApp Bridge] Sell con SL falló en ", mt5Sym, " (", trade.ResultRetcodeDescription(), "). Reintentando sin SL en mercado directo...");
-            success = trade.Sell(safeLot, mt5Sym, bid, 0.0, 0.0, comment);
-         }
+         success = trade.Sell(safeLot, mt5Sym, bid, 0.0, 0.0, comment);
       }
       
       ulong dealTicket = trade.ResultDeal();
@@ -796,7 +864,12 @@ void SelectAllCrashBoomSymbols()
       string name = SymbolName(i, false);
       string s = name;
       StringToUpper(s);
-      if(StringFind(s, "CRASH") >= 0 || StringFind(s, "BOOM") >= 0)
+      if(StringFind(s, "CRASH") >= 0 || StringFind(s, "BOOM") >= 0 ||
+         StringFind(s, "STEP") >= 0 || StringFind(s, "VOLATILITY") >= 0 ||
+         StringFind(s, "JUMP") >= 0 || StringFind(s, "XAU") >= 0 ||
+         StringFind(s, "XAG") >= 0 || StringFind(s, "EURUSD") >= 0 ||
+         StringFind(s, "GBPUSD") >= 0 || StringFind(s, "GBPJPY") >= 0 ||
+         StringFind(s, "USDJPY") >= 0)
       {
          SymbolSelect(name, true);
          if(h != INVALID_HANDLE)

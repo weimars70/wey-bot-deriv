@@ -12,7 +12,19 @@ export class TradeRecord {
   id: string;
 
   @Column('varchar', { length: 30 })
-  strategy: 'H1_NO_WICK' | 'CRASH_BOOM_IA' | 'DOUBLE_WICK_MECHA' | 'DASHBOARD_STARS' | 'MANUAL_APP' | 'M5_PLUS' | 'M5_X' | 'WATCHED_LEVEL' | 'WATCHED_LEVEL_BT';
+  strategy:
+    | 'H1_NO_WICK'
+    | 'CRASH_BOOM_IA'
+    | 'DOUBLE_WICK_MECHA'
+    | 'DASHBOARD_STARS'
+    | 'MANUAL_APP'
+    | 'M5_PLUS'
+    | 'M5_X'
+    | 'WATCHED_LEVEL'
+    | 'WATCHED_LEVEL_BT'
+    | 'SPIKE_RADAR'
+    | 'EA_WEY_SMC'
+    | 'SMC_SYNTHETICS';
 
   @Column('boolean', { default: false })
   backtesting: boolean;

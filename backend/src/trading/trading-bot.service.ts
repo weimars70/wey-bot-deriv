@@ -9,6 +9,8 @@ import { CrashIaStrategyService } from '../strategies/crash-ia-strategy.service'
 import { H1StrategyService } from '../strategies/h1-strategy.service';
 import { M5PlusStrategyService } from '../strategies/m5plus-strategy.service';
 import { M5XStrategyService } from '../strategies/m5x-strategy.service';
+import { EaWeySMCService } from '../strategies/ea-wey-smc.service';
+import { SmcSyntheticsService } from '../strategies/smc-synthetics.service';
 import { TradingStatsService } from './trading-stats.service';
 import { UsersService } from '../users/users.service';
 import { EvolutionCallService } from '../notifications/evolution-call.service';
@@ -82,6 +84,8 @@ export class TradingBotService implements OnModuleInit {
   private h1EvaluationInFlight = false;
   private lastH1AnalysisAt = 0;
   private lastDashboardEvaluationMinuteKey = -1;
+  private lastDashboardSignalsScanAt = 0;
+  private dashboardSignalsScanInFlight = false;
   private lastCrashBoomAlertMinuteKey = -1;
   private crashBoomAlertInFlight = false;
 
@@ -92,6 +96,8 @@ export class TradingBotService implements OnModuleInit {
     private readonly h1Service: H1StrategyService,
     private readonly m5PlusService: M5PlusStrategyService,
     private readonly m5XService: M5XStrategyService,
+    private readonly eaWeySmcService: EaWeySMCService,
+    private readonly smcSyntheticsService: SmcSyntheticsService,
     private readonly statsService: TradingStatsService,
     private readonly usersService: UsersService,
     private readonly evolutionCallService: EvolutionCallService,
@@ -160,7 +166,18 @@ export class TradingBotService implements OnModuleInit {
    * Cuenta cuántos trades ABIERTOS de la app hay actualmente para una estrategia dada.
    * Esto permite respetar el límite de 3 entradas por estrategia.
    */
-  private getOpenTradeCountByStrategy(strategy: 'H1_NO_WICK' | 'CRASH_BOOM_IA' | 'DOUBLE_WICK_MECHA' | 'M5_PLUS' | 'M5_X'): number {
+  private getOpenTradeCountByStrategy(
+    strategy:
+      | 'H1_NO_WICK'
+      | 'CRASH_BOOM_IA'
+      | 'DOUBLE_WICK_MECHA'
+      | 'M5_PLUS'
+      | 'M5_X'
+      | 'SPIKE_RADAR'
+      | 'EA_WEY_SMC'
+      | 'SMC_SYNTHETICS'
+      | 'DASHBOARD_STARS',
+  ): number {
     let count = 0;
     for (const trade of this.activeTradesMap.values()) {
       if (trade.status === 'OPEN' && trade.strategy === strategy) {
@@ -168,6 +185,33 @@ export class TradingBotService implements OnModuleInit {
       }
     }
     return count;
+  }
+
+  /**
+   * Clasifica el símbolo en una de las 3 categorías de reglas de salida:
+   * - CRASH_BOOM: SL máximo 8 min, Trailing Stop 60% siempre que esté en profit
+   * - SYNTHETIC_OTHER (Step, Jump, Volatility): SL máximo 7 USD, asegurar 50% en profit si no llega al TP final
+   * - FOREX_METALS (XAUUSD, XAGUSD, pares Forex): SL máximo 8 USD, asegurar 60% cuando profit > 8 USD y esperar hasta TP
+   */
+  getAssetCategory(symbol: string): 'CRASH_BOOM' | 'SYNTHETIC_OTHER' | 'FOREX_METALS' {
+    const s = (symbol || '').toUpperCase().replace(/\s+/g, '');
+    if (s.includes('CRASH') || s.includes('BOOM')) {
+      return 'CRASH_BOOM';
+    }
+    if (
+      s.startsWith('FRX') ||
+      s.includes('XAU') ||
+      s.includes('XAG') ||
+      s.includes('GOLD') ||
+      s.includes('SILVER') ||
+      s.includes('EURUSD') ||
+      s.includes('GBPUSD') ||
+      s.includes('GBPJPY') ||
+      s.includes('USDJPY')
+    ) {
+      return 'FOREX_METALS';
+    }
+    return 'SYNTHETIC_OTHER';
   }
 
   private hasOpenH1Trade(): boolean {
@@ -198,10 +242,10 @@ export class TradingBotService implements OnModuleInit {
   }
 
   normalizeSymbol(symbol: string): string {
-    const s = (symbol || '')
-      .toUpperCase()
-      .replace(/\s+/g, '')
-      .replace('INDEX', '');
+    const raw = (symbol || '').toUpperCase().trim();
+    const s = raw.replace(/\s+/g, '').replace('INDEX', '');
+
+    // Crash & Boom
     if (s.includes('CRASH1000')) return 'CRASH1000';
     if (s.includes('BOOM1000')) return 'BOOM1000';
     if (s.includes('CRASH300')) return 'CRASH300';
@@ -212,6 +256,39 @@ export class TradingBotService implements OnModuleInit {
     if (s.includes('BOOM600')) return 'BOOM600';
     if (s.includes('CRASH500')) return 'CRASH500';
     if (s.includes('BOOM500')) return 'BOOM500';
+
+    // Step Index
+    if (s.includes('STPRNG') || s.includes('STEP')) return 'STPRNG';
+
+    // Volatility (1s)
+    if (s.includes('1HZ100V') || (raw.includes('VOLATILITY 100') && raw.includes('1S'))) return '1HZ100V';
+    if (s.includes('1HZ75V') || (raw.includes('VOLATILITY 75') && raw.includes('1S'))) return '1HZ75V';
+    if (s.includes('1HZ50V') || (raw.includes('VOLATILITY 50') && raw.includes('1S'))) return '1HZ50V';
+    if (s.includes('1HZ25V') || (raw.includes('VOLATILITY 25') && raw.includes('1S'))) return '1HZ25V';
+    if (s.includes('1HZ10V') || (raw.includes('VOLATILITY 10') && raw.includes('1S'))) return '1HZ10V';
+
+    // Volatility (Normal)
+    if (s === 'R_100' || raw.includes('VOLATILITY 100')) return 'R_100';
+    if (s === 'R_75' || raw.includes('VOLATILITY 75')) return 'R_75';
+    if (s === 'R_50' || raw.includes('VOLATILITY 50')) return 'R_50';
+    if (s === 'R_25' || raw.includes('VOLATILITY 25')) return 'R_25';
+    if (s === 'R_10' || raw.includes('VOLATILITY 10')) return 'R_10';
+
+    // Jump Indices
+    if (s === 'JD100' || raw.includes('JUMP 100')) return 'JD100';
+    if (s === 'JD75' || raw.includes('JUMP 75')) return 'JD75';
+    if (s === 'JD50' || raw.includes('JUMP 50')) return 'JD50';
+    if (s === 'JD25' || raw.includes('JUMP 25')) return 'JD25';
+    if (s === 'JD10' || raw.includes('JUMP 10')) return 'JD10';
+
+    // Forex & Metales
+    if (s.includes('XAUUSD')) return 'XAUUSD';
+    if (s.includes('XAGUSD')) return 'XAGUSD';
+    if (s.includes('GBPJPY')) return 'GBPJPY';
+    if (s.includes('GBPUSD')) return 'GBPUSD';
+    if (s.includes('EURUSD')) return 'EURUSD';
+    if (s.includes('USDJPY')) return 'USDJPY';
+
     return s;
   }
 
@@ -264,6 +341,9 @@ export class TradingBotService implements OnModuleInit {
   }
 
   getMaxSlUsd(symbol: string): number {
+    const category = this.getAssetCategory(symbol);
+    if (category === 'FOREX_METALS') return 8.0;
+    if (category === 'SYNTHETIC_OTHER') return 7.0;
     const up = (symbol || '').toUpperCase();
     if (up.includes('600') && up.includes('CRASH')) return 8.0;
     return 5.0;
@@ -477,23 +557,23 @@ export class TradingBotService implements OnModuleInit {
   // ════════════════════════════════════════════════════════════════════════════
 
   /**
-   * Lógica universal de salida para operaciones de índices sintéticos:
+   * Lógica universal de salida y gestión de riesgo virtual (sin marcar SL ni TP en MT5):
    *
-   * A) STOP LOSS POR TIEMPO (10 MINUTOS / 10 VELAS M1):
-   *    Si transcurren 10 minutos desde la entrada y no se ha detectado ningún spike
-   *    en el símbolo posterior a la entrada → cerrar el trade por Stop Loss de tiempo.
+   * 1. CRASH_BOOM (Índices Crash y Boom):
+   *    - SL máximo por tiempo: 8 minutos (si pasan 8 min sin estar en profit, cierra).
+   *    - Trailing Stop: Siempre que esté en profit, asegura el 60% del profit máximo alcanzado.
    *
-   * B) SALIDA POST-SPIKE EN PROFIT (5 MIN TRAS SPIKE):
-   *    Si ocurrió un spike después de la entrada y transcurrieron 5 minutos desde
-   *    el último spike → si el trade está en profit, cerrar asegurando ganancia.
+   * 2. SYNTHETIC_OTHER (Step, Jump, Volatility):
+   *    - SL máximo monetario: 7 USD.
+   *    - Trailing Stop: Si está en profit, asegura el 50% si se devuelve antes de llegar al TP final virtual.
    *
-   * C) TIMEOUT DE SEGURIDAD POST-SPIKE:
-   *    Si hubo spike pero pasan 20 min desde la entrada sin alcanzar profit, cerrar.
+   * 3. FOREX_METALS (Oro, Plata y Pares de Forex):
+   *    - SL máximo monetario: 8 USD.
+   *    - Trailing Stop: Asegura el 60% cuando esté en profit mayor a 8 USD y espera hasta el TP final virtual.
    */
   async checkActiveTradeExits() {
     const nowMs = Date.now();
-    const TIMEOUT_NO_SPIKE_MS = 10 * 60 * 1000; // 10 minutos (10 velas M1 sin spike)
-    const POST_SPIKE_WAIT_MS  = 5 * 60 * 1000; // 5 minutos tras el spike
+    const CRASH_BOOM_MAX_SL_MS = 8 * 60 * 1000; // 8 minutos máximo para Crash y Boom
 
     for (const trade of this.activeTradesMap.values()) {
       if (trade.status !== 'OPEN') continue;
@@ -501,135 +581,153 @@ export class TradingBotService implements OnModuleInit {
       const entryMs = Number(trade.entryTime) * 1000;
       const elapsedMs = nowMs - entryMs;
       const elapsedSec = Math.floor(elapsedMs / 1000);
+      const category = this.getAssetCategory(trade.symbol);
 
-      // ── A0) CONTROL ESTRICTO DE STOP LOSS MONETARIO ($5 USD / $8 USD Crash 600) ──
-      const maxLossUsd = this.getMaxSlUsd(trade.symbol);
       const lot = trade.lot || this.getDefaultLotForSymbol(trade.symbol) || 0.5;
       const currentPnlUsd = (trade.pnlUsd !== undefined && trade.pnlUsd !== 0)
         ? trade.pnlUsd
         : Number((trade.pnlPoints * lot).toFixed(2));
-
-      if (currentPnlUsd <= -maxLossUsd) {
-        this.logger.log(
-          `🛑 [STOP LOSS MONETARIO -$${maxLossUsd} USD] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Pérdida flotante de $${currentPnlUsd.toFixed(2)} USD alcanzó el límite permitido (-$${maxLossUsd} USD). Cerrando trade inmediatamente.`,
-        );
-        await this.closeTrade(
-          trade.id,
-          `SL_MAX_LOSS_${maxLossUsd}USD`,
-          trade.currentPrice || trade.entryPrice,
-        );
-        continue;
+      const maxProfitUsd = Math.max(
+        trade.maxProfitUsd || 0,
+        Number(((trade.maxProfitPoints || 0) * lot).toFixed(2)),
+      );
+      if (currentPnlUsd > (trade.maxProfitUsd || 0)) {
+        trade.maxProfitUsd = currentPnlUsd;
       }
 
-      const tradeSpikeTime = this.tradeLastSpikeTime.get(trade.id) || 0;
-      const symbolSpikeTime = this.lastSpikeAt.get(trade.symbol) || 0;
-      const lastSpike = trade.strategy === 'H1_NO_WICK'
-        ? tradeSpikeTime
-        : tradeSpikeTime || (symbolSpikeTime > entryMs ? symbolSpikeTime : 0);
-      const spikeOccurredAfterEntry = !!lastSpike && lastSpike > entryMs;
-      const msSinceSpike = spikeOccurredAfterEntry ? (nowMs - lastSpike) : Infinity;
+      const currentPrice =
+        trade.currentPrice ||
+        this.lastTickPrice.get(trade.symbol) ||
+        trade.entryPrice;
 
-      // ── A) STOP LOSS POR TIEMPO: 10 min (10 velas M1) desde entrada sin spike ──
-      if (!spikeOccurredAfterEntry) {
-        if (elapsedMs >= TIMEOUT_NO_SPIKE_MS) {
+      // ── 0) VERIFICAR TAKE PROFIT VIRTUAL (SIN MARCAR TP EN MT5) ──
+      if (trade.takeProfitPrice && trade.takeProfitPrice > 0 && currentPrice > 0) {
+        const tpReached =
+          trade.direction === 'BUY'
+            ? currentPrice >= trade.takeProfitPrice
+            : currentPrice <= trade.takeProfitPrice;
+        if (tpReached && currentPnlUsd > 0) {
           this.logger.log(
-            `⏰ [STOP LOSS 10 MIN / 10 VELAS M1] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Transcurrieron ${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s sin spike. Cerrando por Stop Loss. PnL: ${trade.pnlPoints} pts ($${currentPnlUsd} USD).`,
+            `🎯 [VIRTUAL TP ALCANZADO] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Precio actual ${currentPrice} alcanzó TP virtual ${trade.takeProfitPrice}. Profit: +$${currentPnlUsd.toFixed(2)} USD. Cerrando operación.`,
+          );
+          await this.closeTrade(trade.id, 'VIRTUAL_TP_REACHED', currentPrice);
+          continue;
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // ── REGLA 1: ÍNDICES CRASH Y BOOM (SL máx 8 min + Trailing 60% en profit)
+      // ════════════════════════════════════════════════════════════════════════
+      if (category === 'CRASH_BOOM') {
+        const maxLossUsd = this.getMaxSlUsd(trade.symbol);
+        if (currentPnlUsd <= -maxLossUsd) {
+          this.logger.log(
+            `🛑 [STOP LOSS MONETARIO -$${maxLossUsd} USD] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Pérdida flotante de $${currentPnlUsd.toFixed(2)} USD. Cerrando trade inmediatamente.`,
           );
           await this.closeTrade(
             trade.id,
-            'SL_10_MIN_NO_SPIKE',
-            trade.currentPrice || trade.entryPrice,
+            `SL_MAX_LOSS_${maxLossUsd}USD`,
+            currentPrice,
           );
+          continue;
         }
-        continue;
-      }
 
-      // ── B) Salida Post-Spike: OBLIGATORIO ESPERAR 5 MINUTOS TRAS EL SPIKE ──
-      // EXCEPCIÓN CRÍTICA: Si el profit cae significativamente desde el máximo (trailing stop por profit),
-      // se cierra INMEDIATAMENTE aunque no hayan pasado los 5 minutos, para proteger las ganancias.
-      if (spikeOccurredAfterEntry) {
-        const lot2 = trade.lot || this.getDefaultLotForSymbol(trade.symbol) || 0.5;
-        const currentPnlUsd2 = (trade.pnlUsd !== undefined && trade.pnlUsd !== 0)
-          ? trade.pnlUsd
-          : Number((trade.pnlPoints * lot2).toFixed(2));
-        const maxProfitUsd = Number(((trade.maxProfitPoints || 0) * lot2).toFixed(2));
-
-        // ── PROTECCIÓN DEL 70% DEL PROFIT MÁXIMO ──
-        // Regla: Si el profit máximo alcanzado fue >= $6 USD y el profit actual
-        // cae por debajo del 70% de ese máximo → cerrar de inmediato para proteger las ganancias.
-        // Aplica en todo momento, incluso dentro de los 5 minutos post-spike.
-        // Ejemplo: llegó a $36 USD → cierra si baja de $25.2 USD (70% de $36)
-        if (maxProfitUsd >= 6.0) {
-          const protectedThreshold = maxProfitUsd * 0.70;
-          if (currentPnlUsd2 < protectedThreshold) {
+        // Siempre que esté/haya estado en profit (>= $0.50 USD), hacer trailing stop al 60%
+        if (maxProfitUsd >= 0.50) {
+          const protectedFloor60 = Number((maxProfitUsd * 0.60).toFixed(2));
+          if (currentPnlUsd <= protectedFloor60) {
             this.logger.log(
-              `🔒 [PROTECCIÓN 70% PROFIT] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máximo: +$${maxProfitUsd.toFixed(2)} USD. Profit actual: +$${currentPnlUsd2.toFixed(2)} USD cayó por debajo del 70% (umbral: $${protectedThreshold.toFixed(2)} USD). Cerrando para proteger ganancias.`,
+              `🔒 [TRAILING STOP 60% CRASH/BOOM] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máx +$${maxProfitUsd.toFixed(2)} USD -> actual +$${currentPnlUsd.toFixed(2)} USD (piso 60%: +$${protectedFloor60.toFixed(2)} USD). Cerrando con ganancia asegurada.`,
             );
             await this.closeTrade(
               trade.id,
-              `PROTECT_70PCT_MAX_${maxProfitUsd.toFixed(0)}USD`,
-              trade.currentPrice || trade.entryPrice,
+              'TRAILING_60PCT_CRASH_BOOM',
+              currentPrice,
             );
             continue;
           }
         }
 
-        // 1. SI AÚN NO HAN PASADO LOS 5 MINUTOS TRAS EL SPIKE (y trailing stop no aplicó):
-        if (msSinceSpike < POST_SPIKE_WAIT_MS) {
-          const remainingSec = Math.round((POST_SPIKE_WAIT_MS - msSinceSpike) / 1000);
-          this.logger.debug(
-            `⏳ [ESPERA OBLIGATORIA 5 MIN POST-SPIKE] ${trade.symbol} (${trade.strategy}): Han pasado ${Math.floor((msSinceSpike / 1000) / 60)}m ${Math.floor((msSinceSpike / 1000) % 60)}s tras el spike. Faltan ${remainingSec}s. Profit actual: +$${currentPnlUsd2.toFixed(2)} USD (máx: +$${maxProfitUsd.toFixed(2)} USD).`,
-          );
-          continue;
-        }
-
-        // 2. Si YA transcurrieron los 5 minutos completos tras el spike:
-        // Condición A: Ganancia >= $5.00 USD tras 5 minutos -> Cerrar asegurando profit
-        if (currentPnlUsd2 >= 5.0) {
+        // Stop Loss máximo de 8 minutos si no está en profit
+        if (elapsedMs >= CRASH_BOOM_MAX_SL_MS && currentPnlUsd <= 0) {
           this.logger.log(
-            `🎯 [POST-SPIKE PROFIT >= $5 USD] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Cumplidos 5 min tras spike con ganancia de +$${currentPnlUsd2.toFixed(2)} USD (>= $5 USD). Cerrando con profit asegurado.`,
+            `⏰ [STOP LOSS 8 MIN CRASH/BOOM] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Transcurrieron ${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s sin entrar en profit ($${currentPnlUsd.toFixed(2)} USD). Cerrando por SL de 8 minutos.`,
           );
           await this.closeTrade(
             trade.id,
-            'POST_SPIKE_5_MIN_PROFIT_5USD',
-            trade.currentPrice || trade.entryPrice,
+            'SL_8_MIN_CRASH_BOOM',
+            currentPrice,
           );
           continue;
         }
-
-        // Condición B: Ganancia < $5.00 USD tras 5 minutos -> Se deja correr.
-        // Pero si el precio se regresa al PUNTO DE INICIO (precio de entrada / breakeven) -> Cerrar en punto de inicio
-        const isBackToEntryPoint = trade.direction === 'BUY'
-          ? (trade.currentPrice <= trade.entryPrice || currentPnlUsd2 <= 0.05)
-          : (trade.currentPrice >= trade.entryPrice || currentPnlUsd2 <= 0.05);
-
-        if (isBackToEntryPoint) {
-          this.logger.log(
-            `🛡️ [SALIDA EN PUNTO DE INICIO] ${trade.symbol} (${trade.direction}): Tras 5 min del spike no alcanzó los $5 USD (+${currentPnlUsd2.toFixed(2)} USD) y retrocedió al precio de entrada (${trade.entryPrice}). Cerrando en Breakeven sin pérdidas.`,
-          );
-          await this.closeTrade(
-            trade.id,
-            'EXIT_AT_ENTRY_POINT_BREAKEVEN',
-            trade.entryPrice,
-          );
-          continue;
-        } else {
-          this.logger.debug(
-            `⏳ [DEJANDO CORRER TRAS 5 MIN] ${trade.symbol} (${trade.direction}): 5 min post-spike con +$${currentPnlUsd2.toFixed(2)} USD (< $5 USD). Dejando correr buscando spike mayor o salida en punto de inicio.`,
-          );
-        }
+        continue;
       }
 
-      // ── C) Timeout de seguridad post-spike: 20 min desde entrada sin alcanzar meta ──
-      if (spikeOccurredAfterEntry && elapsedMs >= 20 * 60 * 1000 && (trade.pnlUsd || 0) < 5.0) {
-        this.logger.log(
-          `⏰ [TIMEOUT POST-SPIKE 20 MIN] ${trade.symbol} (${trade.direction} - ${trade.strategy}): 20 min desde entrada sin alcanzar $5 USD. Cerrando trade.`,
-        );
-        await this.closeTrade(
-          trade.id,
-          'TIMEOUT_POST_SPIKE',
-          trade.currentPrice || trade.entryPrice,
-        );
+      // ════════════════════════════════════════════════════════════════════════
+      // ── REGLA 2: STEP, JUMP Y VOLATILITY (SL máx 7 USD + Asegurar 50% en profit)
+      // ════════════════════════════════════════════════════════════════════════
+      if (category === 'SYNTHETIC_OTHER') {
+        if (currentPnlUsd <= -7.0) {
+          this.logger.log(
+            `🛑 [STOP LOSS -7 USD SINTÉTICO] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Pérdida flotante de $${currentPnlUsd.toFixed(2)} USD alcanzó el límite de -7 USD. Cerrando inmediatamente.`,
+          );
+          await this.closeTrade(
+            trade.id,
+            'SL_MAX_7USD_SYNTHETIC',
+            currentPrice,
+          );
+          continue;
+        }
+
+        // Si está en profit y no llega al TP final, asegurar el 50% del profit máximo
+        if (maxProfitUsd >= 0.50) {
+          const protectedFloor50 = Number((maxProfitUsd * 0.50).toFixed(2));
+          if (currentPnlUsd <= protectedFloor50) {
+            this.logger.log(
+              `🔒 [ASEGURAR 50% PROFIT SINTÉTICO] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máx +$${maxProfitUsd.toFixed(2)} USD retrocedió a +$${currentPnlUsd.toFixed(2)} USD antes del TP (piso 50%: +$${protectedFloor50.toFixed(2)} USD). Cerrando en ganancia.`,
+            );
+            await this.closeTrade(
+              trade.id,
+              'TRAILING_50PCT_SYNTHETIC',
+              currentPrice,
+            );
+            continue;
+          }
+        }
+        continue;
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // ── REGLA 3: PARES DE FOREX Y METALES (SL 8 USD + Asegurar 60% si profit > 8 USD y esperar TP)
+      // ════════════════════════════════════════════════════════════════════════
+      if (category === 'FOREX_METALS') {
+        if (currentPnlUsd <= -8.0) {
+          this.logger.log(
+            `🛑 [STOP LOSS -8 USD FOREX/METALES] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Pérdida flotante de $${currentPnlUsd.toFixed(2)} USD alcanzó el límite de -8 USD. Cerrando inmediatamente.`,
+          );
+          await this.closeTrade(
+            trade.id,
+            'SL_MAX_8USD_FOREX',
+            currentPrice,
+          );
+          continue;
+        }
+
+        // Asegurar el 60% cuando esté en profit mayor a 8 USD y esperar hasta el TP
+        if (maxProfitUsd > 8.0) {
+          const protectedFloor60 = Number((maxProfitUsd * 0.60).toFixed(2));
+          if (currentPnlUsd <= protectedFloor60) {
+            this.logger.log(
+              `🔒 [ASEGURAR 60% FOREX PROFIT > $8 USD] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máx +$${maxProfitUsd.toFixed(2)} USD (> $8 USD) retrocedió a +$${currentPnlUsd.toFixed(2)} USD (piso 60%: +$${protectedFloor60.toFixed(2)} USD). Cerrando con profit asegurado.`,
+            );
+            await this.closeTrade(
+              trade.id,
+              'TRAILING_60PCT_FOREX_OVER_8USD',
+              currentPrice,
+            );
+            continue;
+          }
+        }
         continue;
       }
     }
@@ -690,10 +788,21 @@ export class TradingBotService implements OnModuleInit {
 
     if (!isUserOnline) return;
 
-    if (this.dashboardStarsAutoEnabled && shouldEvaluateDashboard) {
-      this.lastDashboardEvaluationMinuteKey = minuteKey;
-      // Señales del dashboard con 4★ o más: solo si está expresamente habilitado
-      await this.evaluateDashboardStarsStrategy();
+    // ── AUTO-TRADE DE TODAS LAS SEÑALES ACTIVAS DEL DASHBOARD (cada ~10s) ──
+    if (
+      (this.dashboardStarsAutoEnabled || this.crashBoomAutoEnabled) &&
+      Date.now() - this.lastDashboardSignalsScanAt >= 10_000 &&
+      !this.dashboardSignalsScanInFlight
+    ) {
+      this.lastDashboardSignalsScanAt = Date.now();
+      this.dashboardSignalsScanInFlight = true;
+      try {
+        await this.evaluateAllDashboardSignals();
+      } catch (err: any) {
+        this.logger.debug(`Error evaluando señales del Dashboard: ${err?.message}`);
+      } finally {
+        this.dashboardSignalsScanInFlight = false;
+      }
     }
 
     if (this.activeTradesMap.size >= this.maxOpenTrades) return;
@@ -950,17 +1059,125 @@ export class TradingBotService implements OnModuleInit {
     }
   }
 
+  /**
+   * Evalúa automáticamente las 4 secciones del Dashboard y ejecuta el trade en MT5
+   * cada vez que aparece una señal activa:
+   * 1. Spike Radar · Crash & Boom IA
+   * 2. EA WEY SMC · Crash & Boom
+   * 3. SMC Pro · Sintéticos (Step, Volatility, Jump), Oro y Forex
+   * 4. Wey Trading · Sala de Operaciones (Señales Viables)
+   */
+  private async evaluateAllDashboardSignals() {
+    if (!(await this.isH1AutoTradingAllowed())) return;
+    if (this.activeTradesMap.size >= this.maxOpenTrades) return;
+
+    // 1. SECCIÓN 1: Spike Radar · Crash & Boom IA
+    try {
+      const radarSignals = await this.crashIaService.getSpikeRadar();
+      for (const sig of radarSignals || []) {
+        if (this.activeTradesMap.size >= this.maxOpenTrades) break;
+        const direction: 'BUY' | 'SELL' | null = sig.canBuy ? 'BUY' : sig.canSell ? 'SELL' : null;
+        if (!direction || !sig.symbol || !sig.currentPrice) continue;
+
+        const cooldownKey = `${sig.symbol}_SPIKE_RADAR`;
+        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
+
+        const opened = await this.openTrade({
+          strategy: 'SPIKE_RADAR',
+          symbol: sig.symbol,
+          mercado: sig.mercado || sig.symbol,
+          direction,
+          entryPrice: sig.currentPrice,
+          stopLossPrice: sig.stopLossPrice || null,
+          takeProfitPrice: sig.takeProfitPrice || null,
+        });
+        if (opened) {
+          this.lastTradeOpenedAt.set(cooldownKey, Date.now());
+          this.logger.log(
+            `🎯 [AUTO-TRADE DASHBOARD · SPIKE RADAR] ${sig.symbol} ${direction} @ ${sig.currentPrice} (Score: ${sig.score}) enviado a MT5 sin marcar SL/TP.`,
+          );
+        }
+      }
+    } catch (e: any) {
+      this.logger.debug(`Error en auto-trade Spike Radar: ${e?.message}`);
+    }
+
+    // 2. SECCIÓN 2: EA WEY SMC · Crash & Boom
+    try {
+      const eaSmcSignals = await this.eaWeySmcService.scanAll();
+      for (const sig of (eaSmcSignals || []).filter((s) => s.ready)) {
+        if (this.activeTradesMap.size >= this.maxOpenTrades) break;
+        if (!sig.symbol || !sig.direction || !sig.currentPrice) continue;
+
+        const cooldownKey = `${sig.symbol}_EA_WEY_SMC`;
+        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
+
+        const opened = await this.openTrade({
+          strategy: 'EA_WEY_SMC',
+          symbol: sig.symbol,
+          mercado: sig.name || sig.symbol,
+          direction: sig.direction,
+          entryPrice: sig.currentPrice,
+          stopLossPrice: sig.stopLossPrice || null,
+          takeProfitPrice: sig.takeProfitPrice || null,
+        });
+        if (opened) {
+          this.lastTradeOpenedAt.set(cooldownKey, Date.now());
+          this.logger.log(
+            `🤖 [AUTO-TRADE DASHBOARD · EA WEY SMC] ${sig.symbol} ${sig.direction} @ ${sig.currentPrice} (Score: ${sig.score}/7) enviado a MT5 sin marcar SL/TP.`,
+          );
+        }
+      }
+    } catch (e: any) {
+      this.logger.debug(`Error en auto-trade EA WEY SMC: ${e?.message}`);
+    }
+
+    // 3. SECCIÓN 3: SMC Pro · Sintéticos (Step, Volatility, Jump), Oro y Forex
+    try {
+      const smcSynthSignals = await this.smcSyntheticsService.scanAll();
+      for (const sig of (smcSynthSignals || []).filter((s) => s.ready)) {
+        if (this.activeTradesMap.size >= this.maxOpenTrades) break;
+        if (!sig.symbol || !sig.direction || !sig.currentPrice) continue;
+
+        const cooldownKey = `${sig.symbol}_SMC_SYNTHETICS`;
+        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
+
+        const opened = await this.openTrade({
+          strategy: 'SMC_SYNTHETICS',
+          symbol: sig.symbol,
+          mercado: sig.name || sig.symbol,
+          direction: sig.direction,
+          entryPrice: sig.currentPrice,
+          stopLossPrice: sig.stopLossPrice || null,
+          takeProfitPrice: sig.takeProfitPrice || null,
+        });
+        if (opened) {
+          this.lastTradeOpenedAt.set(cooldownKey, Date.now());
+          this.logger.log(
+            `⚡ [AUTO-TRADE DASHBOARD · SMC PRO] ${sig.symbol} (${sig.name}) ${sig.direction} @ ${sig.currentPrice} (TP virtual: ${sig.takeProfitPrice}) enviado a MT5 sin marcar SL/TP.`,
+          );
+        }
+      }
+    } catch (e: any) {
+      this.logger.debug(`Error en auto-trade SMC Synthetics/Forex: ${e?.message}`);
+    }
+
+    // 4. SECCIÓN 4: Wey Trading · Sala de Operaciones
+    await this.evaluateDashboardStarsStrategy();
+  }
+
   private async evaluateDashboardStarsStrategy() {
     try {
       if (!(await this.isH1AutoTradingAllowed())) return;
       if (this.activeTradesMap.size >= this.maxOpenTrades) return;
 
-      const { signals } = await this.weySignalsService.getSignals(4, true);
+      const { signals } = await this.weySignalsService.getSignals(3, true);
       const candidates = signals.map((signal) => ({
         stars: Number(signal.estrellas),
         direction: signal.direccion,
         entry: Number(signal.entrada),
         stopLoss: Number(signal.sl),
+        takeProfit: Number(signal.tp),
         mercado: signal.mercado || signal.symbol,
         symbol: signal.symbol,
       }));
@@ -977,7 +1194,7 @@ export class TradingBotService implements OnModuleInit {
 
         const cooldownKey = `${symbol}_DASHBOARD_STARS`;
         const lastOpen = this.lastTradeOpenedAt.get(cooldownKey) || 0;
-        if (Date.now() - lastOpen < 600_000) continue;
+        if (Date.now() - lastOpen < 300_000) continue;
 
         const openedTrade = await this.openTrade({
           strategy: 'DASHBOARD_STARS',
@@ -986,17 +1203,18 @@ export class TradingBotService implements OnModuleInit {
           direction,
           entryPrice: signal.entry,
           stopLossPrice: Number.isFinite(signal.stopLoss) && signal.stopLoss > 0 ? signal.stopLoss : null,
+          takeProfitPrice: Number.isFinite(signal.takeProfit) && signal.takeProfit > 0 ? signal.takeProfit : null,
         });
 
         if (openedTrade) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `⭐ [DASHBOARD 4★+] WEY ${symbol} ${direction} (${signal.stars}★) enviado a MT5.`,
+            `⭐ [AUTO-TRADE DASHBOARD · SALA WEY] ${symbol} ${direction} (${signal.stars}★) enviado a MT5 sin marcar SL/TP.`,
           );
         }
       }
     } catch (err: any) {
-      this.logger.debug(`Error evaluando señales 4★ del dashboard: ${err?.message}`);
+      this.logger.debug(`Error evaluando señales del dashboard: ${err?.message}`);
     }
   }
 
@@ -1308,7 +1526,19 @@ export class TradingBotService implements OnModuleInit {
   }
 
   private async openTrade(params: {
-    strategy: 'H1_NO_WICK' | 'CRASH_BOOM_IA' | 'DOUBLE_WICK_MECHA' | 'DASHBOARD_STARS' | 'MANUAL_APP' | 'M5_PLUS' | 'M5_X' | 'WATCHED_LEVEL' | 'WATCHED_LEVEL_BT';
+    strategy:
+      | 'H1_NO_WICK'
+      | 'CRASH_BOOM_IA'
+      | 'DOUBLE_WICK_MECHA'
+      | 'DASHBOARD_STARS'
+      | 'MANUAL_APP'
+      | 'M5_PLUS'
+      | 'M5_X'
+      | 'WATCHED_LEVEL'
+      | 'WATCHED_LEVEL_BT'
+      | 'SPIKE_RADAR'
+      | 'EA_WEY_SMC'
+      | 'SMC_SYNTHETICS';
     symbol: string;
     mercado: string;
     direction: 'BUY' | 'SELL';
@@ -1425,10 +1655,19 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── FILTRO DE TENDENCIA MACRO (EMA 20 en M15): NO OPERAR CONTRA LA TENDENCIA ──
-      // Si el precio está en tendencia alcista (por encima de EMA20) y queremos SELL → bloquear.
-      // Si el precio está en tendencia bajista (por debajo de EMA20) y queremos BUY → bloquear.
-      // Aplica a todas las estrategias automáticas menos H1_NO_WICK (señal horaria) y MANUAL_APP.
-      if (params.strategy !== 'MANUAL_APP' && params.strategy !== 'H1_NO_WICK') {
+      // Aplica a estrategias de Crash/Boom tradicionales; las señales del Dashboard (SPIKE_RADAR, EA_WEY_SMC, SMC_SYNTHETICS, DASHBOARD_STARS)
+      // ya validan su propia estructura institucional multi-timeframe.
+      const isDashboardValidatedStrategy =
+        params.strategy === 'SPIKE_RADAR' ||
+        params.strategy === 'EA_WEY_SMC' ||
+        params.strategy === 'SMC_SYNTHETICS' ||
+        params.strategy === 'DASHBOARD_STARS';
+      if (
+        params.strategy !== 'MANUAL_APP' &&
+        params.strategy !== 'H1_NO_WICK' &&
+        !isDashboardValidatedStrategy &&
+        this.getAssetCategory(params.symbol) === 'CRASH_BOOM'
+      ) {
         const trendCheck = await this.isTrendFavorable(params.symbol, params.direction);
         if (!trendCheck.favorable) {
           this.logger.warn(
@@ -1440,9 +1679,12 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── RETROALIMENTACIÓN ADAPTATIVA IA (FILTRO HORARIO Y CIRCUIT BREAKER) ──
-      // H1_NO_WICK es una señal horaria directa. No debe quedar bloqueada por
-      // el filtro adaptativo de rendimiento usado por las estrategias frecuentes.
-      if (params.strategy !== 'MANUAL_APP' && params.strategy !== 'H1_NO_WICK') {
+      // H1_NO_WICK y las señales directas del Dashboard no deben quedar bloqueadas por el filtro adaptativo antiguo.
+      if (
+        params.strategy !== 'MANUAL_APP' &&
+        params.strategy !== 'H1_NO_WICK' &&
+        !isDashboardValidatedStrategy
+      ) {
         const adaptiveCheck = await this.statsService.canTradeAdaptive(params.symbol, params.strategy);
         if (!adaptiveCheck.allowed) {
           this.logger.warn(`🛡️ [RETROALIMENTACIÓN IA BLOQUEADA] ${params.symbol}: ${adaptiveCheck.reason}`);
@@ -1460,8 +1702,8 @@ export class TradingBotService implements OnModuleInit {
         params.entryPrice = livePrice;
       }
 
-      // Calcular SL monetario estricto a partir del precio de entrada real
-      if (!params.stopLossPrice || params.strategy !== 'MANUAL_APP') {
+      // Guardar SL virtual de referencia en la BD (NUNCA se envía a MT5 porque el usuario pidió no marcar SL ni TP)
+      if (!params.stopLossPrice) {
         params.stopLossPrice = params.direction === 'BUY'
           ? Number((params.entryPrice - slDistPoints).toFixed(3))
           : Number((params.entryPrice + slDistPoints).toFixed(3));
@@ -1536,10 +1778,10 @@ export class TradingBotService implements OnModuleInit {
         : trade.strategy;
 
       this.logger.log(
-        `🚀 [TRADE OPENED - ${stratLabel}] ${trade.symbol} (${trade.direction}) @ ${trade.entryPrice}. Backtesting: ${isBt ? 'SÍ' : 'NO'}. Lot: ${lot}. SL: ${trade.stopLossPrice} (Límite: -$${maxLossUsd} USD / 4 min). Sesión: ${session} (${hourOfDay}:00). (Total hoy: ${currentCount + 1}/${this.maxTradesPerSymbol})`,
+        `🚀 [TRADE OPENED - ${stratLabel}] ${trade.symbol} (${trade.direction}) @ ${trade.entryPrice}. Backtesting: ${isBt ? 'SÍ' : 'NO'}. Lot: ${lot}. SL Virtual: ${trade.stopLossPrice} / TP Virtual: ${trade.takeProfitPrice || 'N/A'} (SIN MARCAR SL/TP EN MT5). Sesión: ${session} (${hourOfDay}:00). (Total hoy: ${currentCount + 1}/${this.maxTradesPerSymbol})`,
       );
 
-      // ── Enviar orden al puente de MetaTrader 5 con el Stop Loss de precio calculado ──
+      // ── Enviar orden al puente de MetaTrader 5 SIN MARCAR SL NI TP (sl=0, tp=0) ──
       await this.sendMt5Command({
         id: `cmd_${randomUUID().slice(0, 8)}`,
         tradeId: trade.id,
@@ -1547,8 +1789,8 @@ export class TradingBotService implements OnModuleInit {
         symbol: this.toMt5Symbol(trade.symbol),
         direction: trade.direction,
         entryPrice: trade.entryPrice,
-        stopLossPrice: trade.stopLossPrice,
-        takeProfitPrice: trade.takeProfitPrice,
+        stopLossPrice: 0,
+        takeProfitPrice: 0,
         lot: trade.lot || this.getDefaultLotForSymbol(trade.symbol),
         comment: mt5Comment,
         status: 'PENDING',
@@ -1650,10 +1892,9 @@ export class TradingBotService implements OnModuleInit {
     if (reason !== 'MT5_CLOSED') {
       let ticketToClose = trade.mt5Ticket ? Number(trade.mt5Ticket) : 0;
       if (!ticketToClose) {
-        const normSym = (s: string) => (s || '').toUpperCase().replace(/[\s_]/g, '').replace('INDEX', '');
         const found = this.mt5Positions.find(
           (p) =>
-            normSym(p.symbol) === normSym(trade.symbol) &&
+            this.isSameSymbol(p.symbol, trade.symbol) &&
             Number(p.magic) === 999888 &&
             p.type === trade.direction,
         );
@@ -1854,11 +2095,11 @@ export class TradingBotService implements OnModuleInit {
               id: `cmd_retry_${trade.id.slice(0, 8)}_${nowSec}`,
               tradeId: trade.id,
               action: 'OPEN',
-              symbol: trade.symbol,
+              symbol: this.toMt5Symbol(trade.symbol),
               direction: trade.direction,
               entryPrice: trade.entryPrice,
-              stopLossPrice: trade.stopLossPrice,
-              takeProfitPrice: trade.takeProfitPrice,
+              stopLossPrice: 0,
+              takeProfitPrice: 0,
               lot: trade.lot || this.getDefaultLotForSymbol(trade.symbol),
               comment: trade.strategy,
               status: 'PENDING',
@@ -1896,8 +2137,7 @@ export class TradingBotService implements OnModuleInit {
         rawPositions.map((p) => String(p.ticket)),
       );
 
-      const normSym = (str: string) =>
-        (str || '').toUpperCase().replace(/\s+/g, '').replace('INDEX', '').replace(/N$/, '');
+      const normSym = (str: string) => this.normalizeSymbol(str);
 
       // Vincular automáticamente trades locales con posiciones de MT5 (solo magic 999888).
       const assignedTickets = new Set(
@@ -1941,33 +2181,88 @@ export class TradingBotService implements OnModuleInit {
             if (mt5Pos.profit > (trade.maxProfitPoints || 0)) {
               trade.maxProfitPoints = mt5Pos.profit;
             }
+            if (mt5Pos.profit > (trade.maxProfitUsd || 0)) {
+              trade.maxProfitUsd = mt5Pos.profit;
+            }
 
             // Si en MT5 el trade alcanza ganancia de spike (>= $1.50 USD), registrar el spike
-            if (mt5Pos.profit >= 1.50) {
+            if (mt5Pos.profit >= 1.50 && this.getAssetCategory(trade.symbol) === 'CRASH_BOOM') {
               const prevTradeSpike = this.tradeLastSpikeTime.get(trade.id) || 0;
-              if (!prevTradeSpike || (Date.now() - prevTradeSpike > 15_000 && mt5Pos.profit > (trade.maxProfitPoints || 0))) {
+              if (!prevTradeSpike || (Date.now() - prevTradeSpike > 15_000 && mt5Pos.profit >= (trade.maxProfitUsd || 0))) {
                 this.tradeLastSpikeTime.set(trade.id, Date.now());
                 this.lastSpikeAt.set(trade.symbol, Date.now());
-                this.logger.log(
-                  `⚡ [SPIKE CONFIRMADO POR MT5] ${trade.symbol} (${trade.strategy}): Profit MT5 +$${mt5Pos.profit.toFixed(2)} USD. Iniciando/reiniciando espera obligatoria de 5 minutos tras el spike.`,
-                );
               }
             }
 
-            // ── REGLA: SOLO PROTEGER EL PROFIT SI EL PICO ALCANZÓ AL MENOS $6.00 USD ──
-            // EXCEPCIÓN CRÍTICA: H1_NO_WICK NUNCA se cierra por trailing de pico.
-            if (trade.strategy !== 'H1_NO_WICK' && (trade.maxProfitPoints || 0) >= 6.0) {
-              const protectedFloor = Number((trade.maxProfitPoints * 0.70).toFixed(2));
-              if (mt5Pos.profit <= protectedFloor) {
+            // ── GESTIÓN VIRTUAL DE TP, SL MONETARIO Y TRAILING SEGÚN CATEGORÍA EN MT5 SYNC ──
+            const cat = this.getAssetCategory(trade.symbol);
+            const curProfit = Number(mt5Pos.profit) || 0;
+            const peakUsd = Math.max(trade.maxProfitUsd || 0, trade.maxProfitPoints || 0);
+
+            // 0) TP Virtual
+            if (trade.takeProfitPrice && trade.takeProfitPrice > 0 && mt5Pos.currentPrice > 0) {
+              const hitTp =
+                trade.direction === 'BUY'
+                  ? mt5Pos.currentPrice >= trade.takeProfitPrice
+                  : mt5Pos.currentPrice <= trade.takeProfitPrice;
+              if (hitTp && curProfit > 0) {
                 this.logger.log(
-                  `🛡️ [PROTECCIÓN 70% MT5] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico de +$${trade.maxProfitPoints.toFixed(2)} USD. Protegiendo 70% al retroceder a +$${mt5Pos.profit.toFixed(2)} USD (piso 70%: +$${protectedFloor} USD). Cerrando en ganancia.`,
+                  `🎯 [MT5 VIRTUAL TP] ${trade.symbol} (Ticket #${trade.mt5Ticket}) alcanzó TP virtual ${trade.takeProfitPrice} con +$${curProfit.toFixed(2)} USD. Cerrando.`,
                 );
-                await this.closeTrade(
-                  trade.id,
-                  'PROTECT_70_PERCENT_PROFIT',
-                  trade.currentPrice || trade.entryPrice,
-                );
+                await this.closeTrade(trade.id, 'VIRTUAL_TP_REACHED', mt5Pos.currentPrice);
                 continue;
+              }
+            }
+
+            if (cat === 'CRASH_BOOM') {
+              // Trailing 60% siempre que esté en profit
+              if (peakUsd >= 0.50) {
+                const floor60 = Number((peakUsd * 0.60).toFixed(2));
+                if (curProfit <= floor60) {
+                  this.logger.log(
+                    `🔒 [MT5 TRAILING 60% CRASH/BOOM] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico +$${peakUsd.toFixed(2)} USD -> actual +$${curProfit.toFixed(2)} USD (piso 60%: +$${floor60} USD). Cerrando.`,
+                  );
+                  await this.closeTrade(trade.id, 'TRAILING_60PCT_CRASH_BOOM', mt5Pos.currentPrice);
+                  continue;
+                }
+              }
+            } else if (cat === 'SYNTHETIC_OTHER') {
+              // Step, Jump, Volatility: SL 7 USD y asegurar 50% en profit
+              if (curProfit <= -7.0) {
+                this.logger.log(
+                  `🛑 [MT5 SL -7 USD SINTÉTICO] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pérdida $${curProfit.toFixed(2)} USD <= -7 USD. Cerrando.`,
+                );
+                await this.closeTrade(trade.id, 'SL_MAX_7USD_SYNTHETIC', mt5Pos.currentPrice);
+                continue;
+              }
+              if (peakUsd >= 0.50) {
+                const floor50 = Number((peakUsd * 0.50).toFixed(2));
+                if (curProfit <= floor50) {
+                  this.logger.log(
+                    `🔒 [MT5 TRAILING 50% SINTÉTICO] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico +$${peakUsd.toFixed(2)} USD -> actual +$${curProfit.toFixed(2)} USD (piso 50%: +$${floor50} USD). Cerrando.`,
+                  );
+                  await this.closeTrade(trade.id, 'TRAILING_50PCT_SYNTHETIC', mt5Pos.currentPrice);
+                  continue;
+                }
+              }
+            } else if (cat === 'FOREX_METALS') {
+              // Forex y Metales: SL 8 USD y asegurar 60% cuando profit > 8 USD esperando TP
+              if (curProfit <= -8.0) {
+                this.logger.log(
+                  `🛑 [MT5 SL -8 USD FOREX] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pérdida $${curProfit.toFixed(2)} USD <= -8 USD. Cerrando.`,
+                );
+                await this.closeTrade(trade.id, 'SL_MAX_8USD_FOREX', mt5Pos.currentPrice);
+                continue;
+              }
+              if (peakUsd > 8.0) {
+                const floor60 = Number((peakUsd * 0.60).toFixed(2));
+                if (curProfit <= floor60) {
+                  this.logger.log(
+                    `🔒 [MT5 TRAILING 60% FOREX >$8] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico +$${peakUsd.toFixed(2)} USD -> actual +$${curProfit.toFixed(2)} USD (piso 60%: +$${floor60} USD). Cerrando.`,
+                  );
+                  await this.closeTrade(trade.id, 'TRAILING_60PCT_FOREX_OVER_8USD', mt5Pos.currentPrice);
+                  continue;
+                }
               }
             }
           }
@@ -1986,21 +2281,11 @@ export class TradingBotService implements OnModuleInit {
         }
       }
 
-      // ── RASTREO Y PROTECCIÓN GLOBAL DEL 70% DEL PROFIT ──
+      // ── RASTREO Y PROTECCIÓN GLOBAL POR TICKET EN MT5 (solo posiciones del bot Magic 999888) ──
       for (const pos of rawPositions) {
+        if (Number(pos.magic) !== 999888) continue;
         const tKey = String(pos.ticket);
-
-        // Excluir posiciones de H1_NO_WICK (se gestionan estrictamente con espera obligatoria de 5 min tras spike)
-        const tradeForPos = Array.from(this.activeTradesMap.values()).find(
-          (t) => String(t.mt5Ticket) === tKey || tKey.includes(String(t.mt5Ticket)),
-        );
-        if (tradeForPos && tradeForPos.strategy === 'H1_NO_WICK') {
-          continue;
-        }
-        const posComment = String(pos.comment || '');
-        if (posComment.includes('H1')) {
-          continue;
-        }
+        const cat = this.getAssetCategory(pos.symbol);
 
         const curProfit = Number(pos.profit) || 0;
         const prevMax = this.mt5TrackedMaxProfit.get(tKey) || 0;
@@ -2010,23 +2295,43 @@ export class TradingBotService implements OnModuleInit {
         }
 
         const peak = this.mt5TrackedMaxProfit.get(tKey) || 0;
-        // Solo proteger si el beneficio ya alcanzó al menos 6.00 USD
-        if (peak >= 6.0) {
-          const floor70 = Number((peak * 0.70).toFixed(2));
-          if (curProfit <= floor70) {
-            this.logger.log(
-              `🛡️ [PROTECCIÓN 70% MT5] Posición #${tKey} (${pos.symbol}) pico de +$${peak.toFixed(2)} USD. Retroceso a +$${curProfit.toFixed(2)} USD (piso 70%: +$${floor70} USD). Enviando orden de cierre directo a MT5.`,
-            );
-            await this.sendMt5Command({
-              id: `cmd_protect_${randomUUID().slice(0, 8)}`,
-              action: 'CLOSE',
-              ticket: Number(pos.ticket),
-              symbol: pos.symbol,
-              reason: 'PROTECT_70_PERCENT_PROFIT',
-              status: 'PENDING',
-            });
-            this.mt5TrackedMaxProfit.delete(tKey);
+        let shouldClose = false;
+        let closeReason = '';
+
+        if (cat === 'CRASH_BOOM' && peak >= 0.50 && curProfit <= Number((peak * 0.60).toFixed(2))) {
+          shouldClose = true;
+          closeReason = 'TRAILING_60PCT_CRASH_BOOM';
+        } else if (cat === 'SYNTHETIC_OTHER') {
+          if (curProfit <= -7.0) {
+            shouldClose = true;
+            closeReason = 'SL_MAX_7USD_SYNTHETIC';
+          } else if (peak >= 0.50 && curProfit <= Number((peak * 0.50).toFixed(2))) {
+            shouldClose = true;
+            closeReason = 'TRAILING_50PCT_SYNTHETIC';
           }
+        } else if (cat === 'FOREX_METALS') {
+          if (curProfit <= -8.0) {
+            shouldClose = true;
+            closeReason = 'SL_MAX_8USD_FOREX';
+          } else if (peak > 8.0 && curProfit <= Number((peak * 0.60).toFixed(2))) {
+            shouldClose = true;
+            closeReason = 'TRAILING_60PCT_FOREX_OVER_8USD';
+          }
+        }
+
+        if (shouldClose) {
+          this.logger.log(
+            `🛡️ [MT5 DIRECT PROTECT] Posición #${tKey} (${pos.symbol}) [${closeReason}] Pico: +$${peak.toFixed(2)} USD | Actual: $${curProfit.toFixed(2)} USD. Enviando cierre a MT5.`,
+          );
+          await this.sendMt5Command({
+            id: `cmd_protect_${randomUUID().slice(0, 8)}`,
+            action: 'CLOSE',
+            ticket: Number(pos.ticket),
+            symbol: pos.symbol,
+            reason: closeReason,
+            status: 'PENDING',
+          });
+          this.mt5TrackedMaxProfit.delete(tKey);
         }
       }
 
@@ -2159,18 +2464,19 @@ export class TradingBotService implements OnModuleInit {
   }
 
   isSameSymbol(symA: string, symB: string): boolean {
-    const norm = (s: string) =>
-      (s || '')
-        .toUpperCase()
-        .replace(/\s+/g, '')
-        .replace('INDEX', '')
-        .replace(/N$/, '');
-    return norm(symA) === norm(symB);
+    return this.normalizeSymbol(symA) === this.normalizeSymbol(symB);
   }
 
   getDefaultLotForSymbol(sym: string): number {
-    const s = (sym || '').toUpperCase().replace(/\s+/g, '');
+    const cat = this.getAssetCategory(sym);
+    if (cat === 'FOREX_METALS') {
+      return 0.05;
+    }
+    if (cat === 'SYNTHETIC_OTHER') {
+      return 0.10;
+    }
 
+    const s = (sym || '').toUpperCase().replace(/\s+/g, '');
     if (
       s.includes('CRASH600') || s.includes('C600') ||
       s.includes('CRASH900') || s.includes('C900') ||
