@@ -56,6 +56,13 @@ export class TradingBotService implements OnModuleInit {
   private readonly GOLD_SL_COOLDOWN_MS = 10 * 60 * 1000;
   private lastGoldSlExitAt = 0;
 
+  // ── REGLA USUARIO: Cooldown de 30 minutos tras salir en Stop Loss en el mismo índice ──
+  private readonly SYMBOL_SL_COOLDOWN_MS = 30 * 60 * 1000;
+  private lastSymbolSlExitAt = new Map<string, number>();
+
+  // ── REGLA USUARIO: Pausa de 1 hora si al transcurrir una hora se está en déficit o pérdida ──
+  private hourlyDeficitPauseUntil = 0;
+
   // ── Detección de Spikes para H1_NO_WICK ──
   // lastSpikeAt[symbol]: timestamp (ms) del último spike detectado por símbolo
   // tradeLastSpikeTime[tradeId]: timestamp (ms) del último spike detectado para este trade específico
@@ -128,6 +135,11 @@ export class TradingBotService implements OnModuleInit {
         where: { status: 'OPEN' },
       });
       for (const t of openTrades) {
+        // Descartar órdenes fantasma sin ticket de sesiones previas para evitar falsos timeouts
+        if (!t.mt5Ticket && (Date.now() / 1000 - Number(t.entryTime || 0)) > 45) {
+          this.tradeRepo.update(t.id, { status: 'CLOSED', exitReason: 'ORPHAN_STARTUP_CLEANED' }).catch(() => {});
+          continue;
+        }
         this.activeTradesMap.set(t.id, t);
       }
       this.logger.log(`🤖 TradingBot inicializado con ${openTrades.length} trades activos en seguimiento.`);
@@ -196,6 +208,11 @@ export class TradingBotService implements OnModuleInit {
     setInterval(() => {
       this.pollMt5Feedback().catch(() => {});
     }, 2_000);
+
+    // Evaluación continua de déficit / rendimiento horario (cada 60 segundos)
+    setInterval(() => {
+      this.checkHourlyPerformance().catch(() => {});
+    }, 60_000);
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -385,6 +402,7 @@ export class TradingBotService implements OnModuleInit {
       activeCount: this.activeTradesMap.size,
       activeSymbolCount: this.getActiveSymbolCount(),
       goldSlCooldownLeftSec: Math.max(0, Math.ceil((this.GOLD_SL_COOLDOWN_MS - (Date.now() - this.lastGoldSlExitAt)) / 1000)),
+      hourlyDeficitPauseLeftSec: Math.max(0, Math.ceil((this.hourlyDeficitPauseUntil - Date.now()) / 1000)),
     };
   }
 
@@ -413,6 +431,7 @@ export class TradingBotService implements OnModuleInit {
   getMinSlPoints(symbol: string): number {
     const up = (symbol || '').toUpperCase();
     if (up.includes('600') && up.includes('CRASH')) return 32.0; // 8 USD a 0.25 lotes
+    if (up.includes('300') && up.includes('CRASH')) return 20.0; // 10 USD a 0.50 lotes (~19-20 min)
     return 10.0; // ~5 USD a 0.50 lotes
   }
 
@@ -422,6 +441,7 @@ export class TradingBotService implements OnModuleInit {
     if (category === 'SYNTHETIC_OTHER') return 7.0;
     const up = (symbol || '').toUpperCase();
     if (up.includes('600') && up.includes('CRASH')) return 8.0;
+    if (up.includes('300') && up.includes('CRASH')) return 10.0; // 19 minutos de SL a 0.50 lotes (~19 pts = $9.50-$10 USD)
     return 5.0;
   }
 
@@ -728,14 +748,18 @@ export class TradingBotService implements OnModuleInit {
           }
         }
 
-        // Stop Loss máximo de 8 minutos si no está en profit
-        if (elapsedMs >= CRASH_BOOM_MAX_SL_MS && currentPnlUsd <= 0) {
+        // Stop Loss por tiempo: 19 minutos para Crash 300, 8 minutos para los demás Crash/Boom si no está en profit
+        const isCrash300 = (trade.symbol || '').toUpperCase().includes('300') && (trade.symbol || '').toUpperCase().includes('CRASH');
+        const maxSlMs = isCrash300 ? (19 * 60 * 1000) : CRASH_BOOM_MAX_SL_MS;
+        const maxSlMin = isCrash300 ? 19 : 8;
+
+        if (elapsedMs >= maxSlMs && currentPnlUsd <= 0) {
           this.logger.log(
-            `⏰ [STOP LOSS 8 MIN CRASH/BOOM] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Transcurrieron ${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s sin entrar en profit ($${currentPnlUsd.toFixed(2)} USD). Cerrando por SL de 8 minutos.`,
+            `⏰ [STOP LOSS ${maxSlMin} MIN CRASH/BOOM] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Transcurrieron ${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s sin entrar en profit ($${currentPnlUsd.toFixed(2)} USD). Cerrando por SL de ${maxSlMin} minutos.`,
           );
           await this.closeTrade(
             trade.id,
-            'SL_8_MIN_CRASH_BOOM',
+            `SL_${maxSlMin}_MIN_CRASH_BOOM`,
             currentPrice,
           );
           continue;
@@ -1160,9 +1184,17 @@ export class TradingBotService implements OnModuleInit {
         const direction: 'BUY' | 'SELL' | null = sig.canBuy ? 'BUY' : sig.canSell ? 'SELL' : null;
         if (!direction || !sig.symbol || !sig.currentPrice) continue;
 
+        // ── REGLA USUARIO ESTRICTA: Solo entradas del 90% o más de probabilidad/score ──
+        const score = Number(sig.score) || 0;
+        if (score < 90) {
+          this.logger.debug(`[SPIKE_RADAR 90%] ${sig.symbol} omitido: score ${score}% es menor al 90% requerido.`);
+          continue;
+        }
+
         const cooldownKey = `${sig.symbol}_SPIKE_RADAR`;
         if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
 
+        const isHighlyViable = true;
         const opened = await this.openTrade({
           strategy: 'SPIKE_RADAR',
           symbol: sig.symbol,
@@ -1171,11 +1203,13 @@ export class TradingBotService implements OnModuleInit {
           entryPrice: sig.currentPrice,
           stopLossPrice: sig.stopLossPrice || null,
           takeProfitPrice: null, // Sin TP fijo para permitir continuidad en Crash/Boom
+          isHighlyViable,
+          scorePct: score,
         });
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `🎯 [AUTO-TRADE DASHBOARD · SPIKE RADAR] ${sig.symbol} ${direction} @ ${sig.currentPrice} (Score: ${sig.score}) enviado a MT5 sin marcar SL/TP.`,
+            `🎯 [AUTO-TRADE DASHBOARD · SPIKE RADAR ≥90%] ${sig.symbol} ${direction} @ ${sig.currentPrice} (Score: ${score}%) enviado a MT5 sin marcar SL/TP.`,
           );
         }
       }
@@ -1190,9 +1224,28 @@ export class TradingBotService implements OnModuleInit {
         if (this.activeTradesMap.size >= this.maxOpenTrades) break;
         if (!sig.symbol || !sig.direction || !sig.currentPrice) continue;
 
+        // ── REGLA USUARIO ESTRICTA: Solo entradas del 90% o más (7/7 condiciones = 100%) ──
+        const scorePct = Math.round(((sig.score || 0) / 7) * 100);
+        if (scorePct < 90) {
+          this.logger.debug(`[EA_WEY_SMC 90%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/7) es menor al 90% requerido.`);
+          continue;
+        }
+
+        // Candado Sniper SMC: El precio debe haber alcanzado efectivamente el Order Block
+        if (sig.chart?.smcZones?.length) {
+          const zone = sig.chart.smcZones[0];
+          if (sig.direction === 'SELL' && sig.currentPrice < zone.bottom) {
+            continue;
+          }
+          if (sig.direction === 'BUY' && sig.currentPrice > zone.top) {
+            continue;
+          }
+        }
+
         const cooldownKey = `${sig.symbol}_EA_WEY_SMC`;
         if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
 
+        const isHighlyViable = true;
         const opened = await this.openTrade({
           strategy: 'EA_WEY_SMC',
           symbol: sig.symbol,
@@ -1201,11 +1254,13 @@ export class TradingBotService implements OnModuleInit {
           entryPrice: sig.currentPrice,
           stopLossPrice: sig.stopLossPrice || null,
           takeProfitPrice: null, // Sin TP fijo para permitir continuidad en Crash/Boom
+          isHighlyViable,
+          scorePct,
         });
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `🤖 [AUTO-TRADE DASHBOARD · EA WEY SMC] ${sig.symbol} ${sig.direction} @ ${sig.currentPrice} (Score: ${sig.score}/7) enviado a MT5 sin marcar SL/TP.`,
+            `🤖 [AUTO-TRADE DASHBOARD · EA WEY SMC ≥90%] ${sig.symbol} ${sig.direction} @ ${sig.currentPrice} (Score: ${scorePct}%) enviado a MT5 sin marcar SL/TP.`,
           );
         }
       }
@@ -1224,9 +1279,28 @@ export class TradingBotService implements OnModuleInit {
         const symUp = (sig.symbol || '').toUpperCase().replace(/\s+/g, '');
         if (symUp.includes('XAU') || symUp.includes('GOLD')) continue;
 
+        // ── REGLA USUARIO ESTRICTA: Solo entradas del 90% o más (6/6 condiciones = 100%) ──
+        const scorePct = Math.round(((sig.score || 0) / 6) * 100);
+        if (scorePct < 90) {
+          this.logger.debug(`[SMC_SYNTHETICS 90%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/6) es menor al 90% requerido.`);
+          continue;
+        }
+
+        // Candado Sniper SMC: El precio debe haber alcanzado efectivamente el Order Block
+        if (sig.chart?.smcZones?.length) {
+          const zone = sig.chart.smcZones[0];
+          if (sig.direction === 'SELL' && sig.currentPrice < zone.bottom) {
+            continue;
+          }
+          if (sig.direction === 'BUY' && sig.currentPrice > zone.top) {
+            continue;
+          }
+        }
+
         const cooldownKey = `${sig.symbol}_SMC_SYNTHETICS`;
         if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
 
+        const isHighlyViable = true;
         const opened = await this.openTrade({
           strategy: 'SMC_SYNTHETICS',
           symbol: sig.symbol,
@@ -1235,11 +1309,13 @@ export class TradingBotService implements OnModuleInit {
           entryPrice: sig.currentPrice,
           stopLossPrice: sig.stopLossPrice || null,
           takeProfitPrice: sig.takeProfitPrice || null,
+          isHighlyViable,
+          scorePct,
         });
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `⚡ [AUTO-TRADE DASHBOARD · SMC PRO] ${sig.symbol} (${sig.name}) ${sig.direction} @ ${sig.currentPrice} (TP virtual: ${sig.takeProfitPrice}) enviado a MT5 sin marcar SL/TP.`,
+            `⚡ [AUTO-TRADE DASHBOARD · SMC PRO ≥90%] ${sig.symbol} (${sig.name}) ${sig.direction} @ ${sig.currentPrice} (Score: ${scorePct}%, TP virtual: ${sig.takeProfitPrice}) enviado a MT5 sin marcar SL/TP.`,
           );
         }
       }
@@ -1269,6 +1345,12 @@ export class TradingBotService implements OnModuleInit {
         const direction = signal.direction === 'COMPRA' ? 'BUY' : signal.direction === 'VENTA' ? 'SELL' : null;
         if (!direction || !Number.isFinite(signal.entry) || signal.entry <= 0) continue;
 
+        // ── REGLA USUARIO ESTRICTA: Solo señales de 5 estrellas (100% >= 90%) ──
+        if (signal.stars < 5) {
+          this.logger.debug(`[DASHBOARD_STARS 90%] ${symbol} omitido: ${signal.stars} estrellas (< 5 estrellas / < 90%).`);
+          continue;
+        }
+
         const hasOpenForSymbol = Array.from(this.activeTradesMap.values()).some(
           (trade) => trade.status === 'OPEN' && this.isSameSymbol(trade.symbol, symbol),
         );
@@ -1286,6 +1368,8 @@ export class TradingBotService implements OnModuleInit {
           entryPrice: signal.entry,
           stopLossPrice: Number.isFinite(signal.stopLoss) && signal.stopLoss > 0 ? signal.stopLoss : null,
           takeProfitPrice: Number.isFinite(signal.takeProfit) && signal.takeProfit > 0 ? signal.takeProfit : null,
+          isHighlyViable: true,
+          scorePct: 100,
         });
 
         if (openedTrade) {
@@ -1361,6 +1445,7 @@ export class TradingBotService implements OnModuleInit {
           `🕯️ [DOUBLE WICK MECHA] ${sym} ${direction} confirmada. Entrada: ${entryPrice}, SL: ${stopLossPrice}.`,
         );
 
+        const isHighlyViable = Boolean(doubleWick.isValid);
         const openedTrade = await this.openTrade({
           strategy: 'DOUBLE_WICK_MECHA',
           symbol: sym,
@@ -1368,6 +1453,7 @@ export class TradingBotService implements OnModuleInit {
           direction,
           entryPrice,
           stopLossPrice,
+          isHighlyViable,
         });
 
         if (openedTrade) {
@@ -1452,7 +1538,8 @@ export class TradingBotService implements OnModuleInit {
             );
           }
 
-          if (inReactionZone && evalData.canSell && m5IsViable) {
+          const evalScore = Number(evalData.score) || 0;
+          if (inReactionZone && evalData.canSell && m5IsViable && evalScore >= 90) {
             // El SL debe quedar fuera de la zona de reacción, por encima del área entre la
             // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar además
             // el buffer mínimo de la escala del índice.
@@ -1486,6 +1573,8 @@ export class TradingBotService implements OnModuleInit {
               entryPrice: currentPrice,
               stopLossPrice,
               takeProfitPrice,
+              isHighlyViable: true,
+              scorePct: evalScore,
             });
 
             this.lastTradeOpenedAt.set(`${sym}_CRASH_BOOM`, Date.now());
@@ -1507,7 +1596,8 @@ export class TradingBotService implements OnModuleInit {
             );
           }
 
-          if (inReactionZone && evalData.canBuy && m5IsViable) {
+          const evalScore = Number(evalData.score) || 0;
+          if (inReactionZone && evalData.canBuy && m5IsViable && evalScore >= 90) {
             // El SL debe quedar fuera de la zona de reacción, por debajo del área entre la
             // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar
             // además el buffer mínimo de la escala del índice.
@@ -1541,6 +1631,8 @@ export class TradingBotService implements OnModuleInit {
               entryPrice: currentPrice,
               stopLossPrice,
               takeProfitPrice,
+              isHighlyViable: true,
+              scorePct: evalScore,
             });
 
             this.lastTradeOpenedAt.set(`${sym}_CRASH_BOOM`, Date.now());
@@ -1624,6 +1716,8 @@ export class TradingBotService implements OnModuleInit {
     lot?: number;
     backtesting?: boolean;
     mt5Comment?: string;
+    isHighlyViable?: boolean;
+    scorePct?: number | null;
   }) {
     // ── REGLA CRÍTICA USUARIO: Si weimarsuber@gmail.com no está logueado en la app, NO hacer autotrade ──
     if (params.strategy !== 'MANUAL_APP') {
@@ -1713,6 +1807,38 @@ export class TradingBotService implements OnModuleInit {
             `⏳ [BLOQUEO SL ORO] XAUUSD cerró previamente en Stop Loss hace ${Math.floor(msSinceGoldSl / 1000)}s. Prohibida reentrada. Esperando 10 minutos de enfriamiento (${minLeft}m ${secLeft}s restantes).`,
           );
           return null;
+        }
+      }
+
+      // ── CANDADO DE 30 MINUTOS TRAS SALIDA EN STOP LOSS EN EL MISMO ÍNDICE ──
+      const normSymKey = this.normalizeSymbol(params.symbol);
+      const lastSl = Math.max(
+        this.lastSymbolSlExitAt.get(params.symbol) || 0,
+        this.lastSymbolSlExitAt.get(normSymKey) || 0,
+      );
+      const elapsedSinceSl = Date.now() - lastSl;
+      if (lastSl > 0 && elapsedSinceSl < this.SYMBOL_SL_COOLDOWN_MS) {
+        const remSec = Math.ceil((this.SYMBOL_SL_COOLDOWN_MS - elapsedSinceSl) / 1000);
+        const remMin = Math.floor(remSec / 60);
+        this.logger.warn(
+          `🛑 [COOLDOWN SL 30 MIN] ${params.symbol} (${params.strategy}): Salió en SL hace ${Math.floor(elapsedSinceSl / 60000)}m. Bloqueando re-entrada en este índice por ${remMin}m ${remSec % 60}s más.`,
+        );
+        return null;
+      }
+
+      // ── CANDADO DE PAUSA HORARIA POR DÉFICIT / PÉRDIDA ACUMULADA ──
+      if (Date.now() < this.hourlyDeficitPauseUntil) {
+        if (!params.isHighlyViable) {
+          const remSec = Math.ceil((this.hourlyDeficitPauseUntil - Date.now()) / 1000);
+          const remMin = Math.floor(remSec / 60);
+          this.logger.warn(
+            `⛔ [PAUSA HORARIA POR DÉFICIT ACTIVA] ${params.symbol} (${params.strategy}) descartada. Restan ${remMin}m ${remSec % 60}s de pausa horaria. Solo se permiten entradas con calificación MUY VIABLE.`,
+          );
+          return null;
+        } else {
+          this.logger.log(
+            `🌟 [ENTRADA MUY VIABLE PERMITIDA EN PAUSA HORARIA] ${params.symbol} (${params.strategy}) aprobada por cumplir confluencia estricta / máxima viabilidad.`,
+          );
         }
       }
     }
@@ -1891,6 +2017,7 @@ export class TradingBotService implements OnModuleInit {
         spikeCount: 0,
         pnlPercent: 0,
         lot,
+        scorePct: params.scorePct ?? null,
         hourOfDay,
         dayOfWeek,
         session,
@@ -2046,6 +2173,23 @@ export class TradingBotService implements OnModuleInit {
       );
     }
 
+    // ── REGLA USUARIO: Si el trade cerró con SL o pérdida real en mercado (< -$0.05), activar 30 minutos de espera en el mismo índice ──
+    const isSlOrLoss =
+      ((trade.pnlUsd !== undefined && trade.pnlUsd < -0.05) ||
+        trade.result === 'LOSS' ||
+        (reason && reason.toUpperCase().includes('SL'))) &&
+      reason !== 'MT5_TIMEOUT_NO_FILL' &&
+      !reason.includes('NO_FILL');
+
+    if (isSlOrLoss && trade.strategy !== 'MANUAL_APP') {
+      const normSym = this.normalizeSymbol(trade.symbol);
+      this.lastSymbolSlExitAt.set(trade.symbol, Date.now());
+      this.lastSymbolSlExitAt.set(normSym, Date.now());
+      this.logger.warn(
+        `🛑 [SL DETECTADO - COOLDOWN 30 MIN] ${trade.symbol} (${trade.strategy}) salió en SL ($${trade.pnlUsd} USD, motivo: ${reason}). Bloqueando re-entrada en este índice por 30 minutos.`,
+      );
+    }
+
     this.activeTradesMap.delete(id);
 
     try {
@@ -2081,18 +2225,13 @@ export class TradingBotService implements OnModuleInit {
       `🏁 [TRADE CLOSED] ${trade.symbol} (${trade.direction}) cerrado por [${reason}]. PnL: ${trade.pnlPoints} pts.`,
     );
 
-    // ── Enviar orden de cierre al puente de MetaTrader 5 (buscando ticket explícito o por coincidencia) ──
-    if (reason !== 'MT5_CLOSED') {
-      let ticketToClose = trade.mt5Ticket ? Number(trade.mt5Ticket) : 0;
-      if (!ticketToClose) {
-        const found = this.mt5Positions.find(
-          (p) =>
-            this.isSameSymbol(p.symbol, trade.symbol) &&
-            Number(p.magic) === 999888 &&
-            p.type === trade.direction,
-        );
-        if (found) ticketToClose = Number(found.ticket);
-      }
+    // Evaluar déficit o pérdida en la última hora tras cierre de operación
+    this.checkHourlyPerformance().catch(() => {});
+
+    // ── Enviar orden de cierre al puente de MetaTrader 5 ÚNICAMENTE si tiene ticket explícito vinculado ──
+    // NUNCA enviar cierre a MT5 si el motivo es MT5_TIMEOUT_NO_FILL (la orden nunca existió en MT5 y no debe matar posiciones vivas ajenas)
+    if (reason !== 'MT5_CLOSED' && reason !== 'MT5_TIMEOUT_NO_FILL' && !reason.includes('NO_FILL')) {
+      const ticketToClose = trade.mt5Ticket ? Number(trade.mt5Ticket) : 0;
       if (ticketToClose > 0) {
         await this.sendMt5Command({
           id: `cmd_close_${randomUUID().slice(0, 8)}`,
@@ -2609,6 +2748,19 @@ export class TradingBotService implements OnModuleInit {
           }
         }
 
+        // ── REGLA USUARIO: Cooldown de 30 minutos tras salir en SL / pérdida en el mismo índice ──
+        if (pnlUsd < -0.05 && dealCloseMs > 0 && Date.now() - dealCloseMs < this.SYMBOL_SL_COOLDOWN_MS) {
+          const normDealSym = this.normalizeSymbol(deal.symbol);
+          if (dealCloseMs > (this.lastSymbolSlExitAt.get(normDealSym) || 0)) {
+            this.lastSymbolSlExitAt.set(normDealSym, dealCloseMs);
+            this.lastSymbolSlExitAt.set(deal.symbol, dealCloseMs);
+            this.lastSymbolTradeResult.set(normDealSym, 'LOSS');
+            this.logger.warn(
+              `🛑 [MT5 SL HISTORIAL - COOLDOWN 30 MIN] Deal #${dealTicketStr} de ${normDealSym} cerró con pérdida ($${pnlUsd} USD). Cooldown de 30 min activado para este índice.`,
+            );
+          }
+        }
+
         if (existing) {
           if (existing.status !== 'CLOSED' || Math.abs((existing.pnlUsd || 0) - pnlUsd) > 0.01) {
             await this.tradeRepo.update(existing.id, {
@@ -2729,6 +2881,7 @@ export class TradingBotService implements OnModuleInit {
       return 0.25;
     }
     if (
+      s.includes('CRASH300') || s.includes('C300') ||
       s.includes('CRASH900') || s.includes('C900') ||
       s.includes('BOOM1000') || s.includes('B1000')
     ) {
@@ -2748,5 +2901,37 @@ export class TradingBotService implements OnModuleInit {
     if (s.includes('900')) return 6.0;
     if (s.includes('1000')) return 7.0;
     return 3.0;
+  }
+
+  /**
+   * REGLA USUARIO: Evalúa si al transcurrir una hora se está en déficit o pérdida neta acumulada.
+   * Si hay déficit, activa una pausa de 1 hora para todos los trades normales,
+   * permitiendo únicamente entradas clasificadas como MUY VIABLES (isHighlyViable = true).
+   */
+  async checkHourlyPerformance(): Promise<{ netHourlyPnl: number; isDeficit: boolean; pauseUntil: number }> {
+    try {
+      const oneHourAgoSec = Math.floor((Date.now() - 3600_000) / 1000);
+      const trades = await this.tradeRepo
+        .createQueryBuilder('trade')
+        .where('trade.status = :status', { status: 'CLOSED' })
+        .andWhere('trade.exitTime >= :oneHourAgoSec', { oneHourAgoSec })
+        .getMany();
+
+      const netHourlyPnl = Number(trades.reduce((acc, t) => acc + (Number(t.pnlUsd) || 0), 0).toFixed(2));
+      const isDeficit = trades.length > 0 && netHourlyPnl < -0.05;
+
+      if (isDeficit) {
+        if (Date.now() >= this.hourlyDeficitPauseUntil) {
+          this.hourlyDeficitPauseUntil = Date.now() + 3600_000;
+          this.logger.warn(
+            `🛑 [DÉFICIT HORARIO DETECTADO] Pérdida neta de la última hora: $${netHourlyPnl.toFixed(2)} USD (${trades.length} trades cerrados). Activando pausa de 1 hora para trades generales (hasta ${new Date(this.hourlyDeficitPauseUntil).toLocaleTimeString()}). Solo se permitirán entradas MUY VIABLES.`,
+          );
+        }
+      }
+      return { netHourlyPnl, isDeficit, pauseUntil: this.hourlyDeficitPauseUntil };
+    } catch (e: any) {
+      this.logger.debug(`Error al evaluar rendimiento horario: ${e?.message}`);
+      return { netHourlyPnl: 0, isDeficit: false, pauseUntil: this.hourlyDeficitPauseUntil };
+    }
   }
 }

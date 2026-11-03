@@ -670,6 +670,18 @@
             </span>
           </div>
           <div class="text-caption text-slate-400 font-mono">
+            <q-btn
+              color="emerald-8"
+              text-color="white"
+              icon="file_download"
+              label="Descargar CSV / Excel"
+              dense
+              no-caps
+              class="q-px-sm text-weight-bold q-mr-sm"
+              @click="exportTradesToCsv"
+            >
+              <q-tooltip>Descargar tabla completa con PnL (USD) para tabular en Excel</q-tooltip>
+            </q-btn>
             Total registradas: <b>{{ trades.length }}</b>
           </div>
         </div>
@@ -692,6 +704,19 @@
                 :label="props.row.result === 'WIN' ? '🟢 BUENA (WIN)' : props.row.result === 'LOSS' ? '🔴 MALA (SL)' : '⚪ BREAKEVEN'"
                 class="text-weight-bold"
               />
+            </q-td>
+          </template>
+
+          <template #body-cell-scorePct="props">
+            <q-td :props="props" class="text-center">
+              <q-badge
+                v-if="props.row.scorePct != null"
+                :color="props.row.scorePct >= 90 ? 'emerald-9' : 'amber-9'"
+                :text-color="props.row.scorePct >= 90 ? 'emerald-2' : 'amber-2'"
+                :label="props.row.scorePct + '%'"
+                class="text-weight-bold"
+              />
+              <span v-else class="text-slate-500">—</span>
             </q-td>
           </template>
 
@@ -1301,6 +1326,7 @@ const tradeColumns = [
   { name: 'entryTimeFormatted', label: 'Hora Entrada', field: 'entryTimeFormatted', align: 'left' },
   { name: 'symbol', label: 'Índice', field: 'symbol', align: 'left' },
   { name: 'strategy', label: 'Estrategia', field: 'strategy', align: 'left' },
+  { name: 'scorePct', label: 'Score IA', field: 'scorePct', align: 'center' },
   { name: 'entryPrice', label: 'Entrada', field: 'entryPrice', align: 'right' },
   { name: 'exitPrice', label: 'Salida', field: 'exitPrice', align: 'right' },
   { name: 'result', label: 'Resultado', field: 'result', align: 'center' },
@@ -1418,6 +1444,66 @@ function getStatusBadgeColor(status) {
   if (status === 'BLOQUEADO_HORA') return 'red-9';
   if (status === 'CIRCUIT_BREAKER') return 'amber-9';
   return 'emerald-9';
+}
+
+function exportTradesToCsv() {
+  if (!trades.value || trades.value.length === 0) {
+    $q.notify({
+      type: 'warning',
+      message: 'No hay operaciones para exportar en este período.',
+    });
+    return;
+  }
+  const headers = [
+    'ID',
+    'Fecha y Hora Entrada',
+    'Índice',
+    'Dirección',
+    'Estrategia',
+    'Score IA %',
+    'Lote',
+    'Precio Entrada',
+    'Precio Salida',
+    'Resultado',
+    'PnL (USD)',
+    'Duración (min)',
+    'Motivo Cierre',
+    'Ticket MT5'
+  ];
+  
+  const rows = trades.value.map((t) => [
+    t.id,
+    `"${t.entryTimeFormatted || ''}"`,
+    `"${t.symbol || ''}"`,
+    `"${t.direction || ''}"`,
+    `"${t.strategy || ''}"`,
+    t.scorePct != null ? t.scorePct : '',
+    t.lotSize ?? '',
+    t.entryPrice ?? '',
+    t.exitPrice ?? '',
+    `"${t.result || ''}"`,
+    (t.pnl != null ? Number(t.pnl).toFixed(2) : '0.00'),
+    t.durationMin ?? '',
+    `"${(t.exitReason || '').replace(/"/g, '""')}"`,
+    t.ticket ?? ''
+  ]);
+
+  const csvContent = '\uFEFF' + [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  const filename = `auditoria_trades_${startDate.value || 'inicio'}_a_${endDate.value || 'fin'}.csv`;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+
+  $q.notify({
+    type: 'positive',
+    message: `Archivo CSV exportado exitosamente (${trades.value.length} operaciones).`,
+  });
 }
 
 function formatExitReason(reason) {

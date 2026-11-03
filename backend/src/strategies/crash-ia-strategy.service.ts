@@ -133,6 +133,7 @@ export interface CrashIaEvaluation {
   }[];
   timeframeSeconds: number;
   gaps?: CrashIaGapLevel[];
+  score?: number;
 }
 
 export interface SpikeRadarEntry {
@@ -509,6 +510,16 @@ export class CrashIaStrategyService {
       this.logger.debug(`Error cargando gaps para ${sym}: ${e?.message}`);
     }
 
+    let evalScore = 50;
+    if (trendOk) evalScore += 10;
+    if (rsiOk) evalScore += 10;
+    if (velaAmigaOk) evalScore += 10;
+    if (greenOk) evalScore += 5;
+    if (activeOrderBlock && (activeOrderBlock.status === 'FRESCO' || activeOrderBlock.inZone)) evalScore += 10;
+    if (vCandidate) evalScore += 5;
+    if (m5Viability && m5Viability.isViable) evalScore += 10;
+    evalScore = Math.min(100, evalScore);
+
     return {
       symbol: sym,
       mercado,
@@ -556,6 +567,7 @@ export class CrashIaStrategyService {
         retestRange: parseFloat(retestInfo.retestRange.toFixed(3)),
         reason: retestInfo.reason,
       },
+      score: evalScore,
     };
   }
 

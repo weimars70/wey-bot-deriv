@@ -386,13 +386,19 @@ export class EaWeySMCService {
         });
       }
 
+      // Toque efectivo en la zona SMC (evita entradas prematuras antes de tocar el OB/FVG)
+      const inZone = smcZone
+        ? (direction === 'BUY' ? currentPrice <= smcZone.top : currentPrice >= smcZone.bottom)
+        : false;
+
       const conditions: EaWeySMCConditions = { htfBias, htfBiasLabel, hasActiveZone, hasPullback, hasChoCH, inDiscountPremium, hasRecentSpike, notExhausted };
       const score = Object.values(conditions).filter(v => v === true).length;
-      const ready = score >= 6 && htfBias && hasActiveZone && hasPullback && hasChoCH && inDiscountPremium;
+      const ready = score >= 6 && htfBias && hasActiveZone && hasPullback && hasChoCH && inDiscountPremium && inZone;
 
       const missing: string[] = [];
       if (!htfBias)           missing.push(`sesgo H1 ${htfBiasLabel}`);
       if (!hasActiveZone)     missing.push('sin zona SMC activa');
+      if (!inZone)            missing.push(direction === 'BUY' ? 'precio aún no toca el OB compra' : 'precio aún no toca el OB venta');
       if (!hasPullback)       missing.push('pullback insuficiente');
       if (!hasChoCH)          missing.push('sin CHoCH/rechazo');
       if (!inDiscountPremium) missing.push(direction === 'BUY' ? 'precio muy alto' : 'precio muy bajo');

@@ -95,6 +95,9 @@ export class TradeRecord {
   @Column('float', { nullable: true, default: 0.5 })
   lot: number | null;
 
+  @Column('float', { nullable: true })
+  scorePct: number | null; // Puntaje / Probabilidad de la señal al abrir (ej: 90, 95, 100)
+
   @Column('integer', { nullable: true })
   durationSec: number | null;
 

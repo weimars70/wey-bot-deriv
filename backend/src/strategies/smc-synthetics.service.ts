@@ -620,11 +620,17 @@ export class SmcSyntheticsService {
         notExhausted,
       ].filter(Boolean).length;
 
-      // Listo si tiene al menos 5 de 6 y confirmaciones esenciales
-      const ready = score >= 5 && hasActiveZone && inDiscountPremium && (hasChoCH || hasPullback);
+      // Toque efectivo en la zona SMC (evita entradas prematuras antes de tocar el OB/FVG)
+      const inZone = smcZone
+        ? (direction === 'BUY' ? currentPrice <= smcZone.top : currentPrice >= smcZone.bottom)
+        : false;
+
+      // Listo si tiene al menos 5 de 6 y confirmaciones esenciales con toque de zona
+      const ready = score >= 5 && hasActiveZone && inDiscountPremium && (hasChoCH || hasPullback) && inZone;
 
       const missing: string[] = [];
       if (!hasActiveZone)     missing.push('sin zona OB/FVG');
+      if (!inZone)            missing.push(direction === 'BUY' ? 'esperando toque OB compra' : 'esperando toque OB venta');
       if (!hasPullback)       missing.push('pullback en desarrollo');
       if (!hasChoCH)          missing.push('esperando CHoCH/rechazo');
       if (!inDiscountPremium) missing.push(direction === 'BUY' ? 'precio fuera de descuento' : 'precio fuera de premium');

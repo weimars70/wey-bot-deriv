@@ -382,6 +382,9 @@ export class TradingStatsService {
             pnlUsd: p,
             pnlPoints: t.pnlPoints,
             result: res,
+            scorePct: t.scorePct != null ? Number(t.scorePct) : null,
+            lotSize: t.lot,
+            ticket: t.mt5Ticket,
             durationMin: t.durationSec ? Math.round(t.durationSec / 60) : 0,
           };
         });
@@ -465,14 +468,20 @@ export class TradingStatsService {
       bySymbol: bySymbol.sort((a, b) => b.netProfit - a.netProfit),
       byHour,
       byStrategy,
-      trades: trades.slice(0, 100).map((t) => ({
+      trades: trades.slice(0, 500).map((t) => ({
         id: t.id,
         symbol: t.symbol,
         strategy: t.strategy,
         direction: t.direction,
+        lotSize: t.lot,
+        scorePct: t.scorePct != null ? Number(t.scorePct) : null,
+        ticket: t.mt5Ticket,
         entryPrice: t.entryPrice,
         exitPrice: t.exitPrice,
         pnl: getTradePnl(t),
+        pnlUsd: t.pnlUsd != null ? Number(t.pnlUsd) : getTradePnl(t),
+        entryTime: Number(t.entryTime),
+        exitTime: t.exitTime ? Number(t.exitTime) : null,
         pnlPercent: t.exitReason === 'MT5_TIMEOUT_NO_FILL' ? 0 : t.pnlPercent,
         status: t.status,
         result:

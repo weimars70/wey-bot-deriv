@@ -78,6 +78,8 @@ double GetMaxLossForSymbolUSD(string sym)
    StringToUpper(up);
    if(StringFind(up, "600") >= 0 && StringFind(up, "CRASH") >= 0)
       return MaxLossCrash600USD;
+   if(StringFind(up, "300") >= 0 && StringFind(up, "CRASH") >= 0)
+      return 10.00; // 19 minutos a 0.50 lotes (~19-20 pts)
    return MaxLossDefaultUSD;
 }
 
@@ -150,13 +152,20 @@ void ManageNoSpikeTimeout()
 
       int elapsedSec = (int)(TimeCurrent() - entryTime);
       int barsSinceEntry = iBarShift(sym, PERIOD_M1, entryTime, false);
-      if(barsSinceEntry >= 8 || elapsedSec >= 480)
+      string upSym = sym;
+      StringToUpper(upSym);
+      bool isCrash300 = (StringFind(upSym, "CRASH 300") >= 0 || StringFind(upSym, "CRASH300") >= 0);
+      int maxBars = isCrash300 ? 19 : 8;
+      int maxSec = isCrash300 ? (19 * 60) : 480;
+      if(barsSinceEntry >= maxBars || elapsedSec >= maxSec)
       {
-         Print("[DerivApp Bridge] Closing Crash/Boom ticket #", ticket, " after 8 minutes without profit.");
+         Print("[DerivApp Bridge] Closing Crash/Boom ticket #", ticket, " after ", maxBars, " minutes without profit.");
          if(trade.PositionClose(ticket))
          {
-            WriteFeedback("timeout_8min_crash_boom", "", "CLOSED", ticket, "Closed after 8 minutes max SL on Crash/Boom");
+            WriteFeedback("timeout_" + (string)maxBars + "min_crash_boom", "", "CLOSED", ticket, "Closed after " + (string)maxBars + " minutes max SL on Crash/Boom");
             GlobalVariableDel("DAPP_MAXP_" + (string)ticket);
+            GlobalVariableSet("DAPP_SL_" + sym, (double)TimeCurrent());
+            Print("⏳ [DerivApp Bridge] Cooldown de 30 minutos activado para ", sym, " tras salida en Stop Loss por tiempo.");
          }
       }
    }
@@ -186,12 +195,9 @@ void CheckMonetaryStopLoss()
          if(trade.PositionClose(ticket))
          {
             WriteFeedback("sl_monetary", "", "CLOSED", ticket, "Closed by MaxLossUSD Stop Loss");
+            GlobalVariableSet("DAPP_SL_" + posSym, (double)TimeCurrent());
+            Print("⏳ [DerivApp Bridge] Cooldown de 30 minutos activado para ", posSym, " tras salida en Stop Loss monetario.");
             if(GetSymbolBucket(posSym) == 1)
-            {
-               GlobalVariableSet("DAPP_GOLD_SL_TIME", (double)TimeCurrent());
-               Print("⏳ [DerivApp Bridge] Cooldown de 10 minutos activado para XAUUSD tras salida en Stop Loss monetario.");
-            }
-            if(GetSymbolBucket(posSym) == 1) // 1 es XAUUSD / ORO
             {
                GlobalVariableSet("DAPP_GOLD_SL_TIME", (double)TimeCurrent());
                Print("⏳ [DerivApp Bridge] Cooldown de 10 minutos activado para XAUUSD tras salida en Stop Loss monetario.");
@@ -453,6 +459,10 @@ double GetSafeLot(string sym, double desiredLot)
    {
       lot = 0.25;
    }
+   else if(StringFind(s, "CRASH 300") >= 0 || StringFind(s, "CRASH300") >= 0)
+   {
+      lot = 0.50;
+   }
    else if(lot <= 0)
    {
       int cat = GetSymbolCategory(sym);
@@ -647,21 +657,19 @@ void ProcessSingleCommand(string cmdJson)
          }
       }
 
-      // Candado Anti-Reentrada en Oro tras salida en Stop Loss (10 minutos)
-      if(targetBucket == 1)
+      // Candado de 30 minutos de espera tras salida en Stop Loss en el mismo indice
+      string slGv = "DAPP_SL_" + mt5Sym;
+      if(GlobalVariableCheck(slGv))
       {
-         if(GlobalVariableCheck("DAPP_GOLD_SL_TIME"))
+         datetime lastSl = (datetime)GlobalVariableGet(slGv);
+         int elapsed = (int)(TimeCurrent() - lastSl);
+         if(elapsed >= 0 && elapsed < 1800) // 30 minutos
          {
-            datetime lastSl = (datetime)GlobalVariableGet("DAPP_GOLD_SL_TIME");
-            int elapsed = (int)(TimeCurrent() - lastSl);
-            if(elapsed >= 0 && elapsed < 600)
-            {
-               int rem = 600 - elapsed;
-               Print("⛔ [DerivApp Bridge] BLOQUEO SL ORO: XAUUSD salio en SL hace ", elapsed, "s. Esperando 10 minutos de enfriamiento (restan ", rem / 60, "m ", rem % 60, "s). Orden descartada.");
-               WriteFeedback(cmdId, tradeId, "REJECTED_GOLD_SL_COOLDOWN", 0, "Oro en cooldown de 10 min tras salida en Stop Loss");
-               MarkAsExecuted(cmdId);
-               return;
-            }
+            int rem = 1800 - elapsed;
+            Print("⛔ [DerivApp Bridge] BLOQUEO SL 30 MIN: ", mt5Sym, " salio en SL hace ", elapsed, "s. Esperando 30 minutos de enfriamiento (restan ", rem / 60, "m ", rem % 60, "s). Orden descartada.");
+            WriteFeedback(cmdId, tradeId, "REJECTED_SL_30MIN_COOLDOWN", 0, "Indice en enfriamiento de 30 min tras salida en SL");
+            MarkAsExecuted(cmdId);
+            return;
          }
       }
       // Candado de seguridad estricto para sinteticos Deriv:

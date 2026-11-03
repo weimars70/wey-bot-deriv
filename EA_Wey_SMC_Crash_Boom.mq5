@@ -43,7 +43,7 @@ input double           SpikeEntryATR      = 2.0;             // tamano minimo de
 input double           SpikeRetracementPct = 50.0;           // nivel de entrada como % del recorrido origen-extremo del spike (50 = mitad)
 input bool             EnableContinuationEntries = true;     // operar la N tras romper el swing intermedio
 input bool             MarketContinuationEntries = true;      // entrar al mercado al confirmar la ruptura; false = esperar retesteo LIMIT
-input bool             EnableAnticipatedLineEntries = true;     // entrar hasta 120 s antes de lineas activas; OB tambien al toque
+input bool             EnableAnticipatedLineEntries = false;    // entrar hasta 120 s antes de lineas activas; desactivado para entrar solo al toque exacto de la zona
 input int              ContinuationMaxWaitBars = 6;          // antiguedad maxima del extremo de la N en velas
 input int              TrendPullbackMaxBars  = 24;           // antiguedad maxima del swing para entrada en retroceso
 input double           TrendPullbackMinATR   = 0.5;           // retroceso minimo para entrada en tendencia (x ATR)
@@ -114,9 +114,9 @@ input double           LT_MinGapATR       = 0.3;             // tamano minimo de
 input bool             LT_FirstTouchOnly  = false;           // true = solo el primer retorno a la zona (mas estricto)
 input double           LT_MinWickPct      = 0.0;             // mecha minima de rechazo en modo 1 (0 = no exigir)
 input double           LT_SLBufferATR     = 0.3;             // colchon del SL (x ATR)
-input int              LT_SLMode          = 1;               // 0 = SL tras el borde lejano de la zona (amplio), 1 = tras el extremo reciente (ajustado)
+input int              LT_SLMode          = 0;               // 0 = SL tras el borde lejano de la zona (amplio y protegido), 1 = tras el extremo reciente (ajustado)
 input int              LT_SLSwingBars     = 6;               // modo 1: velas recientes cuyo extremo protege la entrada
-input double           LT_NearToleranceATR = 0.5;            // se acepta la entrada a X ATR antes de llegar al borde de la zona
+input double           LT_NearToleranceATR = 0.0;            // se acepta la entrada a X ATR antes de llegar al borde de la zona (0 = toque obligatorio)
 input double           LT_MaxPenetrationPct = 70.0;          // no entrar si el precio ya recorrio mas de este % de la zona
 input double           LT_MaxSL_ATR       = 8.0;             // SL maximo permitido (x ATR)
 input double           LT_BreakEvenATR    = 3.0;             // breakeven al avanzar X ATR
@@ -1681,7 +1681,8 @@ void RememberTriggeredLine(const string key)
 
 bool TryEnterBeforeLine(const double level, const string key, const double price,
                         const double velocity, const bool allowEntry,
-                        const bool allowBrokerMinStop = false, const bool atTouch = false)
+                        const bool allowBrokerMinStop = false, const bool atTouch = false,
+                        const double zoneTop = 0, const double zoneBottom = 0)
 {
    if(WasLineTriggered(key)) return false;
 
@@ -1728,6 +1729,19 @@ bool TryEnterBeforeLine(const double level, const string key, const double price
    }
 
    double sl = (allowedDir > 0) ? entry - slDist : entry + slDist;
+   if(zoneTop > 0 && zoneBottom > 0)
+   {
+      if(allowedDir < 0)
+      {
+         double obSafeSL = zoneTop + MathMax(SLBufferATR, 0.5) * atr;
+         if(obSafeSL > sl) sl = obSafeSL;
+      }
+      else
+      {
+         double obSafeSL = zoneBottom - MathMax(SLBufferATR, 0.5) * atr;
+         if(obSafeSL < sl) sl = obSafeSL;
+      }
+   }
    if(!ApplyTenMinuteStop(allowedDir, entry,
                           MathMax(MinSL_ATR * atr, minStop + spread), sl))
       return false;
@@ -1779,7 +1793,7 @@ bool TryEnterBeforeLine(const double level, const string key, const double price
 
 void CheckAnticipatedLineEntry(const bool allowEntry)
 {
-   if(!EnableAnticipatedLineEntries) return;
+
 
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol, tick)) return;
@@ -1787,14 +1801,14 @@ void CheckAnticipatedLineEntry(const bool allowEntry)
    double velocity = UpdateApproachVelocity(tick);
    bool hasVelocity = MathAbs(velocity) >= _Point * 0.1;
 
-   if(hasVelocity && hasAnticipatedWatchLevel)
+   if(EnableAnticipatedLineEntries && hasVelocity && hasAnticipatedWatchLevel)
    {
       string key = WatchLineName() + ":" + DoubleToString(anticipatedWatchLevel, _Digits);
       if(TryEnterBeforeLine(anticipatedWatchLevel, key, price, velocity, allowEntry))
          return;
    }
 
-   for(int i = 0; hasVelocity && i < ArraySize(zones); i++)
+   for(int i = 0; EnableAnticipatedLineEntries && hasVelocity && i < ArraySize(zones); i++)
    {
       if(!zones[i].chochConfirmed || zones[i].retestConfirmed) continue;
       string key = ZoneName(zones[i]) + "_R:" + DoubleToString(zones[i].breakLevel, _Digits);
@@ -1813,16 +1827,18 @@ void CheckAnticipatedLineEntry(const bool allowEntry)
       if(touchingZone &&
          TryEnterBeforeLine(entryLine, touchedOBZones[i].key, price, velocity,
                             CanTradeNow(false, AllowAdditionalOBTouchPositions),
-                            AllowAdditionalOBTouchPositions, true))
+                            AllowAdditionalOBTouchPositions, true,
+                            touchedOBZones[i].top, touchedOBZones[i].bottom))
          return;
 
-      bool approachingFromOutside = hasVelocity &&
+      bool approachingFromOutside = EnableAnticipatedLineEntries && hasVelocity &&
                                    ((allowedDir > 0)
                                     ? price > touchedOBZones[i].top && velocity < 0
                                     : price < touchedOBZones[i].bottom && velocity > 0);
       if(approachingFromOutside &&
          TryEnterBeforeLine(entryLine, touchedOBZones[i].key, price, velocity,
-                            allowEntry, true))
+                            allowEntry, false, false,
+                            touchedOBZones[i].top, touchedOBZones[i].bottom))
          return;
    }
 }
