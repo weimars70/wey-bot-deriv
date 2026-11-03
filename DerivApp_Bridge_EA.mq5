@@ -581,6 +581,9 @@ void ProcessSingleCommand(string cmdJson)
    double lot     = ExtractJsonNumber(cmdJson, "lot");
    double sl      = ExtractJsonNumber(cmdJson, "stopLossPrice");
    double tp      = ExtractJsonNumber(cmdJson, "takeProfitPrice");
+   double score   = ExtractJsonNumber(cmdJson, "score");
+   string viableStr = ExtractJsonString(cmdJson, "isHighlyViable");
+   bool isViable  = (score >= 85.0 || viableStr == "true" || viableStr == "1");
    
    if(cmdId == "" || IsAlreadyExecuted(cmdId)) return;
    
@@ -665,11 +668,18 @@ void ProcessSingleCommand(string cmdJson)
          int elapsed = (int)(TimeCurrent() - lastSl);
          if(elapsed >= 0 && elapsed < 1800) // 30 minutos
          {
-            int rem = 1800 - elapsed;
-            Print("⛔ [DerivApp Bridge] BLOQUEO SL 30 MIN: ", mt5Sym, " salio en SL hace ", elapsed, "s. Esperando 30 minutos de enfriamiento (restan ", rem / 60, "m ", rem % 60, "s). Orden descartada.");
-            WriteFeedback(cmdId, tradeId, "REJECTED_SL_30MIN_COOLDOWN", 0, "Indice en enfriamiento de 30 min tras salida en SL");
-            MarkAsExecuted(cmdId);
-            return;
+            if(isViable)
+            {
+               Print("⚡ [DerivApp Bridge] Cooldown 30 min activo en ", mt5Sym, " (transcurridos ", elapsed, "s), pero orden AUTORIZADA por ALTA VIABILIDAD (Score: ", DoubleToString(score, 0), "% >= 85%).");
+            }
+            else
+            {
+               int rem = 1800 - elapsed;
+               Print("⛔ [DerivApp Bridge] BLOQUEO SL 30 MIN: ", mt5Sym, " salio en SL hace ", elapsed, "s. Esperando 30 minutos de enfriamiento (restan ", rem / 60, "m ", rem % 60, "s). Orden descartada.");
+               WriteFeedback(cmdId, tradeId, "REJECTED_SL_30MIN_COOLDOWN", 0, "Indice en enfriamiento de 30 min tras salida en SL");
+               MarkAsExecuted(cmdId);
+               return;
+            }
          }
       }
       // Candado de seguridad estricto para sinteticos Deriv:
@@ -790,8 +800,10 @@ void ProcessSingleCommand(string cmdJson)
                closed = trade.PositionClose(targetTicket);
                if(closed)
                {
-                  Print("🏁 [DerivApp Bridge] Posicion cerrada por ticket en MT5. Ticket: ", targetTicket);
-                  WriteFeedback(cmdId, tradeId, "CLOSED", targetTicket, "Closed OK by ticket");
+                  Print("🏁 [DerivApp Bridge] Posicion cerrada por ticket en MT5. Ticket: ", targetTicket, " Motivo: ", reason);
+                  GlobalVariableDel("DAPP_MAXP_" + (string)targetTicket);
+                  GlobalVariableDel("DAPP_SPIKE_" + (string)targetTicket);
+                  WriteFeedback(cmdId, tradeId, "CLOSED", targetTicket, "Closed OK: " + reason);
                }
                else
                {

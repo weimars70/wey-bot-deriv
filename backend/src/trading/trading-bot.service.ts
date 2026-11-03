@@ -71,6 +71,25 @@ export class TradingBotService implements OnModuleInit {
   private tradeLastSpikeTime = new Map<string, number>();
   private lastTickPrice = new Map<string, number>();
 
+  // ── REGLA USUARIO: Retroceso mínimo al 50% del Spike antes de entrar ──
+  // Guarda el origen, extremo y punto medio (50%) del último spike ocurrido
+  private lastSpikeDetails = new Map<
+    string,
+    {
+      timestamp: number;
+      originPrice: number;
+      extremePrice: number;
+      midpoint: number;
+      isBoom: boolean;
+      delta: number;
+      resolved: boolean;
+    }
+  >();
+
+  // ── REGLA USUARIO: Salida tras Spike en Zona de Retesteo (4 minutos sin nuevo spike) ──
+  // Guarda el timestamp cuando un trade con spike alcanza el tope de la zona de retesteo
+  private tradeRetestTopeReachedAt = new Map<string, number>();
+
   // Puente directo con MetaTrader 5 (detecta automáticamente si existe la ruta local de Weimar o la de .env)
   private readonly mt5FilesDir = (() => {
     const envDir = process.env.MT5_FILES_DIR;
@@ -539,17 +558,53 @@ export class TradingBotService implements OnModuleInit {
     const currentPrice = Number(tick.quote);
     const sym = tick.symbol;
 
-    // ── Detección de Spike en tiempo real para H1_NO_WICK ──
+    // ── Detección de Spike en tiempo real para H1_NO_WICK y Crash/Boom ──
     // Un spike es un movimiento brusco de precio en un solo tick, relativo al símbolo.
     const prevPrice = this.lastTickPrice.get(sym);
     if (prevPrice && prevPrice > 0) {
       const delta = Math.abs(currentPrice - prevPrice);
       const spikeThreshold = this.getSpikeThreshold(sym);
+      const isCb = this.getAssetCategory(sym) === 'CRASH_BOOM';
+      const isBoom = (sym || '').toUpperCase().includes('BOOM');
+      const isFavorableSpikeDirection = isBoom ? currentPrice > prevPrice : currentPrice < prevPrice;
+
       if (delta >= spikeThreshold || delta >= 3.5) {
         const prevSpikeAt = this.lastSpikeAt.get(sym) || 0;
         const now = Date.now();
         this.lastSpikeAt.set(sym, now);
-        if (now - prevSpikeAt > 30_000) {
+
+        // ── Tracking de origen, extremo y retroceso 50% para Crash/Boom ──
+        if (isCb && isFavorableSpikeDirection) {
+          const existingSpike = this.lastSpikeDetails.get(sym);
+          if (existingSpike && !existingSpike.resolved && (now - existingSpike.timestamp < 8_000)) {
+            // Continuación del mismo spike en ticks consecutivos
+            if (!isBoom && currentPrice < existingSpike.extremePrice) {
+              existingSpike.extremePrice = currentPrice;
+              existingSpike.midpoint = Number(((existingSpike.originPrice + existingSpike.extremePrice) / 2).toFixed(3));
+              existingSpike.delta = Math.abs(existingSpike.originPrice - existingSpike.extremePrice);
+            } else if (isBoom && currentPrice > existingSpike.extremePrice) {
+              existingSpike.extremePrice = currentPrice;
+              existingSpike.midpoint = Number(((existingSpike.originPrice + existingSpike.extremePrice) / 2).toFixed(3));
+              existingSpike.delta = Math.abs(existingSpike.originPrice - existingSpike.extremePrice);
+            }
+          } else {
+            const originPrice = prevPrice;
+            const extremePrice = currentPrice;
+            const midpoint = Number(((originPrice + extremePrice) / 2).toFixed(3));
+            this.lastSpikeDetails.set(sym, {
+              timestamp: now,
+              originPrice,
+              extremePrice,
+              midpoint,
+              isBoom,
+              delta,
+              resolved: false,
+            });
+            this.logger.log(
+              `⚡ [SPIKE DETECTADO] ${sym} (${isBoom ? 'BOOM BUY' : 'CRASH SELL'}): delta ${delta.toFixed(3)} pts (Origen: ${originPrice.toFixed(3)}, Extremo: ${extremePrice.toFixed(3)}, Mitad 50%: ${midpoint.toFixed(3)}). Esperando retroceso mínimo al 50% antes de permitir entradas.`,
+            );
+          }
+        } else if (now - prevSpikeAt > 30_000) {
           this.logger.log(
             `⚡ [SPIKE DETECTADO] ${sym}: delta ${delta.toFixed(3)} pts (umbral: ${spikeThreshold}). Spike registrado.`,
           );
@@ -565,15 +620,38 @@ export class TradingBotService implements OnModuleInit {
               const prevTradeSpike = this.tradeLastSpikeTime.get(trade.id) || 0;
               this.tradeLastSpikeTime.set(trade.id, now);
               trade.hadSpike = true;
+              // Si estaba esperando en zona de retesteo, un nuevo spike resetea el temporizador de 4 minutos
+              if (this.tradeRetestTopeReachedAt.has(trade.id)) {
+                this.logger.log(
+                  `⚡ [NUEVO SPIKE EN RETESTEO] ${sym} (${trade.id}): Ocurrió un nuevo spike en la posición. Reseteando temporizador de 4 minutos de retesteo.`,
+                );
+                this.tradeRetestTopeReachedAt.delete(trade.id);
+              }
               if (now - prevTradeSpike > 15_000) {
                 trade.spikeCount = (trade.spikeCount || 0) + 1;
                 this.logger.log(
-                  `⚡ [SPIKE REGISTRADO EN TRADE ${trade.strategy}] ${sym} (${trade.id}): Spike a favor #${trade.spikeCount} detectado. Iniciando espera obligatoria de 5 minutos antes de evaluar salida.`,
+                  `⚡ [SPIKE REGISTRADO EN TRADE ${trade.strategy}] ${sym} (${trade.id}): Spike a favor #${trade.spikeCount} detectado. Iniciando espera y monitoreo de retesteo.`,
                 );
               }
             }
           }
         }
+      }
+    }
+
+    // ── Verificar si el precio ya retrocedió al 50% del spike reciente ──
+    const activeSpike = this.lastSpikeDetails.get(sym);
+    if (activeSpike && !activeSpike.resolved) {
+      if (!activeSpike.isBoom && currentPrice >= activeSpike.midpoint) {
+        activeSpike.resolved = true;
+        this.logger.log(
+          `✅ [RETROCESO 50% ALCANZADO] ${sym}: Precio subió a ${currentPrice.toFixed(3)}, recuperando el 50% (${activeSpike.midpoint.toFixed(3)}) del spike. Entradas autorizadas.`,
+        );
+      } else if (activeSpike.isBoom && currentPrice <= activeSpike.midpoint) {
+        activeSpike.resolved = true;
+        this.logger.log(
+          `✅ [RETROCESO 50% ALCANZADO] ${sym}: Precio bajó a ${currentPrice.toFixed(3)}, retrocediendo el 50% (${activeSpike.midpoint.toFixed(3)}) del spike. Entradas autorizadas.`,
+        );
       }
     }
     this.lastTickPrice.set(sym, currentPrice);
@@ -745,6 +823,89 @@ export class TradingBotService implements OnModuleInit {
               currentPrice,
             );
             continue;
+          }
+        }
+
+        // ── REGLA USUARIO: SALIDA TRAS SPIKE EN TOPE DE ZONA DE RETESTEO (4 MINUTOS SIN NUEVO SPIKE) ──
+        if (trade.hadSpike) {
+          const lastSpikeTime = this.tradeLastSpikeTime.get(trade.id) || entryMs;
+          let isAtRetestTope = false;
+          let retestDesc = '';
+
+          try {
+            const evalData = await this.crashIaService.evaluateSymbol(trade.symbol, 5);
+            if (evalData) {
+              const isBoom = evalData.marketType === 'BOOM';
+              const candleHeight = evalData.m5CandleHeight || 3.0;
+
+              // A. Retesteo en consolidación lateral M5
+              if (evalData.retestZone?.isInRetest) {
+                const ceiling = evalData.retestZone.retestCeiling;
+                const floor = evalData.retestZone.retestFloor;
+                if (!isBoom) {
+                  // En Crash (Venta): al retestear hacia arriba, toca el techo/tope de la zona de retesteo
+                  if (currentPrice >= ceiling - candleHeight * 0.35) {
+                    isAtRetestTope = true;
+                    retestDesc = `Techo de retesteo M5 (${ceiling.toFixed(2)})`;
+                  }
+                } else {
+                  // En Boom (Compra): al retestear hacia abajo, toca el piso/tope de la zona de retesteo
+                  if (currentPrice <= floor + candleHeight * 0.35) {
+                    isAtRetestTope = true;
+                    retestDesc = `Piso de retesteo M5 (${floor.toFixed(2)})`;
+                  }
+                }
+              }
+
+              // B. Estado institucional formal 'EN_RETESTEO'
+              if (!isAtRetestTope && evalData.status === 'EN_RETESTEO') {
+                isAtRetestTope = true;
+                retestDesc = 'Zona formal de retesteo M5';
+              }
+
+              // C. Tope de Caja Institucional (boxCeiling en Crash / boxFloor en Boom)
+              if (!isAtRetestTope) {
+                if (!isBoom && evalData.boxCeiling && currentPrice >= evalData.boxCeiling - candleHeight * 0.25) {
+                  isAtRetestTope = true;
+                  retestDesc = `Tope de caja (${evalData.boxCeiling.toFixed(2)})`;
+                } else if (isBoom && evalData.boxFloor && currentPrice <= evalData.boxFloor + candleHeight * 0.25) {
+                  isAtRetestTope = true;
+                  retestDesc = `Tope inferior de caja (${evalData.boxFloor.toFixed(2)})`;
+                }
+              }
+            }
+          } catch (e: any) {
+            // Ignorar errores transitorios en consulta
+          }
+
+          if (isAtRetestTope) {
+            if (!this.tradeRetestTopeReachedAt.has(trade.id)) {
+              this.tradeRetestTopeReachedAt.set(trade.id, nowMs);
+              this.logger.log(
+                `📍 [TOPE DE RETESTEO TRAS SPIKE] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Posición con spike alcanzó ${retestDesc}. Esperando 4 minutos (240s) por un nuevo spike...`,
+              );
+            }
+
+            const topeReachedAt = this.tradeRetestTopeReachedAt.get(trade.id)!;
+            const timeAtTopeMs = nowMs - topeReachedAt;
+            const timeSinceLastSpikeMs = nowMs - lastSpikeTime;
+            const FOUR_MIN_MS = 4 * 60 * 1000; // 4 minutos = 240 segundos
+
+            // Si ya transcurrieron 4 minutos en el tope de retesteo y en esos 4 minutos no hubo ningún spike nuevo:
+            if (timeAtTopeMs >= FOUR_MIN_MS && timeSinceLastSpikeMs >= FOUR_MIN_MS) {
+              const profitText = currentPnlUsd >= 0 ? `+$${currentPnlUsd.toFixed(2)} USD` : `-$${Math.abs(currentPnlUsd).toFixed(2)} USD`;
+              this.logger.log(
+                `⏱️ [SALIDA 4 MIN SIN NUEVO SPIKE EN RETESTEO] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Pasaron 4 minutos en el tope de retesteo sin nuevo spike. Cerrando trade para asegurar ganancia/resultado (${profitText}).`,
+              );
+              this.tradeRetestTopeReachedAt.delete(trade.id);
+              await this.closeTrade(trade.id, 'RETEST_TOPE_NO_NEW_SPIKE_4MIN', currentPrice);
+              continue;
+            }
+          } else {
+            // Si el precio ya no está en el tope de la zona de retesteo, resetear temporizador
+            if (this.tradeRetestTopeReachedAt.has(trade.id)) {
+              this.tradeRetestTopeReachedAt.delete(trade.id);
+            }
           }
         }
 
@@ -1184,10 +1345,10 @@ export class TradingBotService implements OnModuleInit {
         const direction: 'BUY' | 'SELL' | null = sig.canBuy ? 'BUY' : sig.canSell ? 'SELL' : null;
         if (!direction || !sig.symbol || !sig.currentPrice) continue;
 
-        // ── REGLA USUARIO ESTRICTA: Solo entradas del 90% o más de probabilidad/score ──
+        // ── REGLA USUARIO: Solo entradas del 85% o más de probabilidad/score ──
         const score = Number(sig.score) || 0;
-        if (score < 90) {
-          this.logger.debug(`[SPIKE_RADAR 90%] ${sig.symbol} omitido: score ${score}% es menor al 90% requerido.`);
+        if (score < 85) {
+          this.logger.debug(`[SPIKE_RADAR 85%] ${sig.symbol} omitido: score ${score}% es menor al 85% requerido.`);
           continue;
         }
 
@@ -1209,7 +1370,7 @@ export class TradingBotService implements OnModuleInit {
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `🎯 [AUTO-TRADE DASHBOARD · SPIKE RADAR ≥90%] ${sig.symbol} ${direction} @ ${sig.currentPrice} (Score: ${score}%) enviado a MT5 sin marcar SL/TP.`,
+            `🎯 [AUTO-TRADE DASHBOARD · SPIKE RADAR ≥85%] ${sig.symbol} ${direction} @ ${sig.currentPrice} (Score: ${score}%) enviado a MT5 sin marcar SL/TP.`,
           );
         }
       }
@@ -1224,10 +1385,10 @@ export class TradingBotService implements OnModuleInit {
         if (this.activeTradesMap.size >= this.maxOpenTrades) break;
         if (!sig.symbol || !sig.direction || !sig.currentPrice) continue;
 
-        // ── REGLA USUARIO ESTRICTA: Solo entradas del 90% o más (7/7 condiciones = 100%) ──
+        // ── REGLA USUARIO: Solo entradas del 85% o más (6/7 = 86%, 7/7 = 100%) ──
         const scorePct = Math.round(((sig.score || 0) / 7) * 100);
-        if (scorePct < 90) {
-          this.logger.debug(`[EA_WEY_SMC 90%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/7) es menor al 90% requerido.`);
+        if (scorePct < 85) {
+          this.logger.debug(`[EA_WEY_SMC 85%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/7) es menor al 85% requerido.`);
           continue;
         }
 
@@ -1260,7 +1421,7 @@ export class TradingBotService implements OnModuleInit {
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `🤖 [AUTO-TRADE DASHBOARD · EA WEY SMC ≥90%] ${sig.symbol} ${sig.direction} @ ${sig.currentPrice} (Score: ${scorePct}%) enviado a MT5 sin marcar SL/TP.`,
+            `🤖 [AUTO-TRADE DASHBOARD · EA WEY SMC ≥85%] ${sig.symbol} ${sig.direction} @ ${sig.currentPrice} (Score: ${scorePct}%) enviado a MT5 sin marcar SL/TP.`,
           );
         }
       }
@@ -1279,10 +1440,10 @@ export class TradingBotService implements OnModuleInit {
         const symUp = (sig.symbol || '').toUpperCase().replace(/\s+/g, '');
         if (symUp.includes('XAU') || symUp.includes('GOLD')) continue;
 
-        // ── REGLA USUARIO ESTRICTA: Solo entradas del 90% o más (6/6 condiciones = 100%) ──
+        // ── REGLA USUARIO: Solo entradas del 85% o más (5/6 = 83%, 6/6 = 100%) ──
         const scorePct = Math.round(((sig.score || 0) / 6) * 100);
-        if (scorePct < 90) {
-          this.logger.debug(`[SMC_SYNTHETICS 90%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/6) es menor al 90% requerido.`);
+        if (scorePct < 83) {
+          this.logger.debug(`[SMC_SYNTHETICS 85%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/6) es menor al 85% requerido.`);
           continue;
         }
 
@@ -1315,7 +1476,7 @@ export class TradingBotService implements OnModuleInit {
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
           this.logger.log(
-            `⚡ [AUTO-TRADE DASHBOARD · SMC PRO ≥90%] ${sig.symbol} (${sig.name}) ${sig.direction} @ ${sig.currentPrice} (Score: ${scorePct}%, TP virtual: ${sig.takeProfitPrice}) enviado a MT5 sin marcar SL/TP.`,
+            `⚡ [AUTO-TRADE DASHBOARD · SMC PRO ≥85%] ${sig.symbol} (${sig.name}) ${sig.direction} @ ${sig.currentPrice} (Score: ${scorePct}%, TP virtual: ${sig.takeProfitPrice}) enviado a MT5 sin marcar SL/TP.`,
           );
         }
       }
@@ -1539,7 +1700,7 @@ export class TradingBotService implements OnModuleInit {
           }
 
           const evalScore = Number(evalData.score) || 0;
-          if (inReactionZone && evalData.canSell && m5IsViable && evalScore >= 90) {
+          if (inReactionZone && evalData.canSell && m5IsViable && evalScore >= 85) {
             // El SL debe quedar fuera de la zona de reacción, por encima del área entre la
             // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar además
             // el buffer mínimo de la escala del índice.
@@ -1597,7 +1758,7 @@ export class TradingBotService implements OnModuleInit {
           }
 
           const evalScore = Number(evalData.score) || 0;
-          if (inReactionZone && evalData.canBuy && m5IsViable && evalScore >= 90) {
+          if (inReactionZone && evalData.canBuy && m5IsViable && evalScore >= 85) {
             // El SL debe quedar fuera de la zona de reacción, por debajo del área entre la
             // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar
             // además el buffer mínimo de la escala del índice.
@@ -1818,12 +1979,19 @@ export class TradingBotService implements OnModuleInit {
       );
       const elapsedSinceSl = Date.now() - lastSl;
       if (lastSl > 0 && elapsedSinceSl < this.SYMBOL_SL_COOLDOWN_MS) {
-        const remSec = Math.ceil((this.SYMBOL_SL_COOLDOWN_MS - elapsedSinceSl) / 1000);
-        const remMin = Math.floor(remSec / 60);
-        this.logger.warn(
-          `🛑 [COOLDOWN SL 30 MIN] ${params.symbol} (${params.strategy}): Salió en SL hace ${Math.floor(elapsedSinceSl / 60000)}m. Bloqueando re-entrada en este índice por ${remMin}m ${remSec % 60}s más.`,
-        );
-        return null;
+        const isViableSignal = params.isHighlyViable === true || (params.scorePct != null && params.scorePct >= 85);
+        if (!isViableSignal) {
+          const remSec = Math.ceil((this.SYMBOL_SL_COOLDOWN_MS - elapsedSinceSl) / 1000);
+          const remMin = Math.floor(remSec / 60);
+          this.logger.warn(
+            `🛑 [COOLDOWN SL 30 MIN] ${params.symbol} (${params.strategy}): Salió en SL hace ${Math.floor(elapsedSinceSl / 60000)}m. Bloqueando re-entrada en este índice por ${remMin}m ${remSec % 60}s más (señal no alcanza el 85% de viabilidad).`,
+          );
+          return null;
+        } else {
+          this.logger.log(
+            `⚡ [EXCEPCIÓN COOLDOWN SL 30 MIN] ${params.symbol} (${params.strategy}): Enfriamiento activo de 30m, pero se AUTORIZA entrada por ALTA VIABILIDAD (Score: ${params.scorePct || 85}% >= 85%).`,
+          );
+        }
       }
 
       // ── CANDADO DE PAUSA HORARIA POR DÉFICIT / PÉRDIDA ACUMULADA ──
@@ -1908,7 +2076,8 @@ export class TradingBotService implements OnModuleInit {
         const requiredCooldown = lastResult === 'LOSS'
           ? this.GLOBAL_SYMBOL_COOLDOWN_MS + this.LOSS_PENALTY_COOLDOWN_MS
           : this.GLOBAL_SYMBOL_COOLDOWN_MS;
-        if (lastOpen > 0 && elapsed < requiredCooldown) {
+        const isViableSignal = params.isHighlyViable === true || (params.scorePct != null && params.scorePct >= 85);
+        if (lastOpen > 0 && elapsed < requiredCooldown && !isViableSignal) {
           const secsLeft = Math.ceil((requiredCooldown - elapsed) / 1000);
           const minLeft = Math.floor(secsLeft / 60);
           const penalty = lastResult === 'LOSS' ? ` (penalización por pérdida previa)` : '';
@@ -1919,20 +2088,68 @@ export class TradingBotService implements OnModuleInit {
         }
       }
 
-      // ── BLOQUEO POST-SPIKE (SOLO PARA ESTRATEGIA CRASH_BOOM_IA) ──
-      // En CRASH_BOOM_IA (compra/venta en zonas V y retroceso 50%), entrar inmediatamente tras un spike
-      // es riesgoso porque le falta retroceso hacia la zona de descuento.
-      // Para H1_NO_WICK (macro 1 hora) y DOUBLE_WICK_MECHA (M5 dos velas con mecha) NO aplica este bloqueo.
-      if (params.strategy === 'CRASH_BOOM_IA') {
-        const POST_SPIKE_BLOCK_MS = 5 * 60 * 1000; // 5 minutos de bloqueo post-spike
-        const lastSpike = this.lastSpikeAt.get(params.symbol) || 0;
-        const msSinceSpike = Date.now() - lastSpike;
-        if (lastSpike > 0 && msSinceSpike < POST_SPIKE_BLOCK_MS) {
-          const secsLeft = Math.ceil((POST_SPIKE_BLOCK_MS - msSinceSpike) / 1000);
-          this.logger.warn(
-            `⚡ [BLOQUEO POST-SPIKE] ${params.symbol} (${params.strategy}): spike detectado hace ${Math.floor(msSinceSpike / 1000)}s. Bloqueando entrada por ${secsLeft}s más.`,
-          );
-          return null;
+      // ── REGLA USUARIO 1: NO HACER TRADE INMEDIATAMENTE TRAS UN SPIKE (ESPERAR AL MENOS AL 50% DE RETROCESO) ──
+      // Aplica a TODOS los índices Crash y Boom y a cualquier estrategia.
+      if (this.getAssetCategory(params.symbol) === 'CRASH_BOOM') {
+        const isBoom = (params.symbol || '').toUpperCase().includes('BOOM');
+        const currentPrice = Number(params.entryPrice) || this.lastTickPrice.get(params.symbol) || 0;
+        let spike = this.lastSpikeDetails.get(params.symbol);
+        const now = Date.now();
+
+        // Si no hay spike en memoria o el registrado expiró/resolvió, revisar si en velas M1 recientes ocurrió un spike
+        if ((!spike || spike.resolved || now - spike.timestamp > 20 * 60 * 1000) && currentPrice > 0) {
+          try {
+            const m1Candles = await this.candlesService.findLatest(params.symbol, 60, 15);
+            if (m1Candles && m1Candles.length > 0) {
+              const spikeThresh = this.getSpikeThreshold(params.symbol);
+              for (let i = m1Candles.length - 1; i >= Math.max(0, m1Candles.length - 12); i--) {
+                const c = m1Candles[i];
+                const cOpen = Number(c.open);
+                const cClose = Number(c.close);
+                const cHigh = Number(c.high);
+                const cLow = Number(c.low);
+                const candleDrop = isBoom ? (cClose - cOpen) : (cOpen - cClose);
+                const candleEpochMs = Number(c.epoch) * 1000;
+                if (candleDrop >= spikeThresh && (now - candleEpochMs < 20 * 60 * 1000)) {
+                  const originPrice = isBoom ? cLow : cHigh;
+                  const extremePrice = isBoom ? cHigh : cLow;
+                  const midpoint = Number(((originPrice + extremePrice) / 2).toFixed(3));
+                  const isResolved = !isBoom ? currentPrice >= midpoint : currentPrice <= midpoint;
+                  spike = {
+                    timestamp: candleEpochMs,
+                    originPrice,
+                    extremePrice,
+                    midpoint,
+                    isBoom,
+                    delta: candleDrop,
+                    resolved: isResolved,
+                  };
+                  this.lastSpikeDetails.set(params.symbol, spike);
+                  break;
+                }
+              }
+            }
+          } catch (e: any) {
+            // Ignorar
+          }
+        }
+
+        if (spike && !spike.resolved && (now - spike.timestamp < 20 * 60 * 1000) && currentPrice > 0) {
+          if (!isBoom && currentPrice < spike.midpoint) {
+            const pct = Math.max(0, Math.min(100, ((currentPrice - spike.extremePrice) / (spike.originPrice - spike.extremePrice)) * 100));
+            this.logger.warn(
+              `⏳ [ESPERA 50% RETROCESO SPIKE] ${params.symbol} (${params.strategy}): Hubo un spike bajista (${spike.delta.toFixed(2)} pts). Precio actual: ${currentPrice.toFixed(2)} está al ${pct.toFixed(1)}% de retroceso. No operar inmediatamente: esperando que suba al menos a la mitad del spike (${spike.midpoint.toFixed(2)}).`,
+            );
+            return null;
+          } else if (isBoom && currentPrice > spike.midpoint) {
+            const pct = Math.max(0, Math.min(100, ((spike.extremePrice - currentPrice) / (spike.extremePrice - spike.originPrice)) * 100));
+            this.logger.warn(
+              `⏳ [ESPERA 50% RETROCESO SPIKE] ${params.symbol} (${params.strategy}): Hubo un spike alcista (${spike.delta.toFixed(2)} pts). Precio actual: ${currentPrice.toFixed(2)} está al ${pct.toFixed(1)}% de retroceso. No operar inmediatamente: esperando que baje al menos a la mitad del spike (${spike.midpoint.toFixed(2)}).`,
+            );
+            return null;
+          } else {
+            spike.resolved = true;
+          }
         }
       }
 
@@ -2102,6 +2319,8 @@ export class TradingBotService implements OnModuleInit {
         takeProfitPrice: 0,
         lot: trade.lot || this.getDefaultLotForSymbol(trade.symbol),
         comment: mt5Comment,
+        score: trade.scorePct ?? 85,
+        isHighlyViable: true,
         status: 'PENDING',
       });
 
@@ -2116,6 +2335,7 @@ export class TradingBotService implements OnModuleInit {
     if (!trade) return null;
 
     this.tradeLastSpikeTime.delete(id);
+    this.tradeRetestTopeReachedAt.delete(id);
 
     trade.status = 'CLOSED';
     trade.exitTime = Math.floor(Date.now() / 1000);

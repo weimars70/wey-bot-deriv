@@ -711,8 +711,8 @@
             <q-td :props="props" class="text-center">
               <q-badge
                 v-if="props.row.scorePct != null"
-                :color="props.row.scorePct >= 90 ? 'emerald-9' : 'amber-9'"
-                :text-color="props.row.scorePct >= 90 ? 'emerald-2' : 'amber-2'"
+                :color="props.row.scorePct >= 85 ? 'emerald-9' : 'amber-9'"
+                :text-color="props.row.scorePct >= 85 ? 'emerald-2' : 'amber-2'"
                 :label="props.row.scorePct + '%'"
                 class="text-weight-bold"
               />
