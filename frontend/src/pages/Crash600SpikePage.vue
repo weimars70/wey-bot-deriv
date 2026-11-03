@@ -669,7 +669,7 @@ const loadingLive = ref(false);
 const executingTrade = ref(false);
 const runningBacktest = ref(false);
 const autoTrading = ref(false);
-const tradeLot = ref(0.30);
+const tradeLot = ref(0.25);
 const liveData = ref(null);
 let pollTimer = null;
 

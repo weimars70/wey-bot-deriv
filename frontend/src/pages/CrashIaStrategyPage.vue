@@ -983,9 +983,10 @@ function focusObCandle(epoch = null) {
 
 function getLotSizeForSymbol(sym) {
   const s = (sym || '').toUpperCase().replace(/\s+/g, '');
+  if (s.includes('CRASH600') || (s.includes('CRASH') && s.includes('600'))) {
+    return '0.25';
+  }
   if (
-    s.includes('CRASH600') ||
-    s.includes('C6') ||
     s.includes('BOOM600') ||
     s.includes('B6') ||
     s.includes('600')

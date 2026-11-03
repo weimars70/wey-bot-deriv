@@ -14,18 +14,28 @@ export class CrashIaStrategyController {
     @Query('symbol') symbol?: string,
     @Query('timeframe') timeframe?: string,
   ) {
-    const sym = symbol || 'CRASH1000';
-    const tf = timeframe ? parseInt(timeframe, 10) : 5;
-    return this.crashIaService.evaluateSymbol(sym, tf);
+    try {
+      const sym = symbol || 'CRASH1000';
+      const tf = timeframe ? parseInt(timeframe, 10) : 5;
+      return await this.crashIaService.evaluateSymbol(sym, tf);
+    } catch (err: any) {
+      console.error(`❌ [CRASH-IA] Error en evaluate(${symbol}):`, err);
+      throw err;
+    }
   }
 
   /**
    * GET /api/strategies/crash-ia/summary
-   * Devuelve el estado rÃ¡pido de todos los Ã­ndices Crash.
+   * Devuelve el estado rápido de todos los índices Crash.
    */
   @Get('summary')
   async summary() {
-    return this.crashIaService.getSummaryAll();
+    try {
+      return await this.crashIaService.getSummaryAll();
+    } catch (err: any) {
+      console.error('❌ [CRASH-IA] Error en summary():', err);
+      throw err;
+    }
   }
 
   /**

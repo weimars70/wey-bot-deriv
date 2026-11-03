@@ -21,14 +21,18 @@ import { CandlesService } from '../candles/candles.service';
 export class TradingBotService implements OnModuleInit {
   private readonly logger = new Logger(TradingBotService.name);
 
-  // Configuraciones del Bot
-  private h1AutoEnabled = true;
-  private dashboardStarsAutoEnabled = true;
+  // Configuraciones del Bot (SMC Pro y todos los Crash/Boom con máx 3 concurrentes, sin entradas en XAUUSD)
+  private h1AutoEnabled = false;
+  private dashboardStarsAutoEnabled = false;
   private crashBoomAutoEnabled = true;
-  private m5PlusAutoEnabled = false; // M5++ auto-trading (desactivado por defecto, activar desde el panel)
+  private m5PlusAutoEnabled = false; // M5++ auto-trading (desactivado)
   private m5XAutoEnabled = false;
-  private maxOpenTrades = 10;
-  private maxOpenSymbols = 8; // Ampliado de 3 a 8 índices para permitir operar en varios activos a la vez
+  private smcProAutoEnabled = true;  // Estrategia SMC Pro activa
+  private maxOpenTrades = 5;
+  private maxOpenSymbols = 5;
+  private maxCrashBoomTrades = 3; // Máximo 3 concurrentes entre Crash y Boom
+  private maxXauusdTrades = 0;    // 0 concurrentes para XAUUSD (Oro bloqueado)
+  private maxOtherTrades = 2;     // Máximo 2 concurrentes para los demás (Step, Jump, Volatility, Forex)
   private maxTradesPerSymbol = 1; // Máximo 1 entrada de la app por índice (trades manuales no cuentan)
 
   // Estado en memoria para respuesta de latencia cero
@@ -48,6 +52,9 @@ export class TradingBotService implements OnModuleInit {
   private lastSymbolTradeOpenedAt = new Map<string, number>();
   // lastSymbolTradeResult[symbol]: 'WIN' | 'LOSS' | 'BREAKEVEN' del último trade cerrado en ese símbolo
   private lastSymbolTradeResult = new Map<string, 'WIN' | 'LOSS' | 'BREAKEVEN'>();
+  // Cooldown de 10 minutos para XAUUSD tras salida en Stop Loss
+  private readonly GOLD_SL_COOLDOWN_MS = 10 * 60 * 1000;
+  private lastGoldSlExitAt = 0;
 
   // ── Detección de Spikes para H1_NO_WICK ──
   // lastSpikeAt[symbol]: timestamp (ms) del último spike detectado por símbolo
@@ -57,10 +64,15 @@ export class TradingBotService implements OnModuleInit {
   private tradeLastSpikeTime = new Map<string, number>();
   private lastTickPrice = new Map<string, number>();
 
-  // Puente directo con MetaTrader 5 (Deriv-Demo / Login: 6026360)
-  private readonly mt5FilesDir =
-    process.env.MT5_FILES_DIR ||
-    'C:/Users/Weimar/AppData/Roaming/MetaQuotes/Terminal/FB9A56D617EDDDFE29EE54EBEFFE96C1/MQL5/Files';
+  // Puente directo con MetaTrader 5 (detecta automáticamente si existe la ruta local de Weimar o la de .env)
+  private readonly mt5FilesDir = (() => {
+    const envDir = process.env.MT5_FILES_DIR;
+    if (envDir && fs.existsSync(envDir)) return envDir;
+    const localWeimarDir =
+      'C:/Users/Weimar/AppData/Roaming/MetaQuotes/Terminal/FB9A56D617EDDDFE29EE54EBEFFE96C1/MQL5/Files';
+    if (fs.existsSync(localWeimarDir)) return localWeimarDir;
+    return envDir || localWeimarDir;
+  })();
   private readonly mt5CommandsFile = `${this.mt5FilesDir}/deriv_bridge_commands.json`;
   private readonly mt5FeedbackFile = `${this.mt5FilesDir}/deriv_bridge_feedback.json`;
   private readonly mt5PositionsFile = `${this.mt5FilesDir}/deriv_bridge_positions.json`;
@@ -77,6 +89,9 @@ export class TradingBotService implements OnModuleInit {
   private m5XCandlesExecuted = new Set<string>();
   private lastM5XEvaluationAt = 0;
   private openingSymbolsInFlight = new Set<string>();
+  private processedFeedbackIds = new Set<string>();
+  private lastProcessedHistMtime = 0;
+  private processedHistoryDeals = new Set<string>();
   private readonly h1AutoAuthorizedEmail = 'weimarsuber@gmail.com';
   private readonly h1EvaluationMinutes = [58, 0];
   private readonly h1ConfirmedEntryMinutes = [58, 0];
@@ -135,6 +150,31 @@ export class TradingBotService implements OnModuleInit {
         .set({ pnlUsd: 0, pnlPoints: 0, pnlPercent: 0, result: 'BREAKEVEN' })
         .where('exitReason = :reason', { reason: 'MT5_TIMEOUT_NO_FILL' })
         .execute();
+
+      // Inicializar cooldown de 10 minutos para el Oro si el último trade cerró en Stop Loss
+      try {
+        const lastGoldTrade = await this.tradeRepo
+          .createQueryBuilder('trade')
+          .where('(UPPER(trade.symbol) LIKE :gold1 OR UPPER(trade.symbol) LIKE :gold2)', { gold1: '%XAU%', gold2: '%GOLD%' })
+          .andWhere('trade.status = :status', { status: 'CLOSED' })
+          .orderBy('trade.exitTime', 'DESC')
+          .getOne();
+
+        if (lastGoldTrade && (Number(lastGoldTrade.pnlUsd) < -0.05 || lastGoldTrade.result === 'LOSS' || (lastGoldTrade.exitReason && lastGoldTrade.exitReason.includes('SL')))) {
+          const exitTimeNum = Number(lastGoldTrade.exitTime);
+          const exitEpochMs = exitTimeNum > 1e11 ? exitTimeNum : exitTimeNum * 1000;
+          const elapsed = Date.now() - exitEpochMs;
+          if (elapsed >= 0 && elapsed < this.GOLD_SL_COOLDOWN_MS) {
+            this.lastGoldSlExitAt = exitEpochMs;
+            const remSec = Math.ceil((this.GOLD_SL_COOLDOWN_MS - elapsed) / 1000);
+            this.logger.warn(
+              `⏳ [INICIALIZACIÓN COOLDOWN ORO] Último trade de Oro cerró en SL hace ${Math.floor(elapsed / 60000)}m. Reentradas en XAUUSD bloqueadas por ${remSec}s más.`,
+            );
+          }
+        }
+      } catch (errGoldInit) {
+        this.logger.debug(`Error al verificar cooldown previo de Oro: ${errGoldInit?.message}`);
+      }
     } catch (e) {
       this.logger.warn(`No se pudieron cargar trades previos de BD: ${e?.message}`);
     }
@@ -212,6 +252,33 @@ export class TradingBotService implements OnModuleInit {
       return 'FOREX_METALS';
     }
     return 'SYNTHETIC_OTHER';
+  }
+
+  getBucket(symbol: string): 'CRASH_BOOM' | 'XAUUSD' | 'OTHER' {
+    const s = (symbol || '').toUpperCase().replace(/\s+/g, '');
+    if (s.includes('CRASH') || s.includes('BOOM')) {
+      return 'CRASH_BOOM';
+    }
+    if (s.includes('XAU') || s.includes('GOLD')) {
+      return 'XAUUSD';
+    }
+    return 'OTHER';
+  }
+
+  getBucketLimit(bucket: 'CRASH_BOOM' | 'XAUUSD' | 'OTHER'): number {
+    if (bucket === 'CRASH_BOOM') return this.maxCrashBoomTrades;
+    if (bucket === 'XAUUSD') return this.maxXauusdTrades;
+    return this.maxOtherTrades;
+  }
+
+  getOpenTradesCountForBucket(bucket: 'CRASH_BOOM' | 'XAUUSD' | 'OTHER'): number {
+    const appCount = Array.from(this.activeTradesMap.values()).filter(
+      (t) => t.status === 'OPEN' && this.getBucket(t.symbol) === bucket,
+    ).length;
+    const mt5Count = (this.mt5Positions || []).filter(
+      (p) => Number(p.magic) === 999888 && this.getBucket(p.symbol) === bucket,
+    ).length;
+    return Math.max(appCount, mt5Count);
   }
 
   private hasOpenH1Trade(): boolean {
@@ -296,6 +363,10 @@ export class TradingBotService implements OnModuleInit {
     return this.normalizeSymbol(symbol);
   }
 
+  isAllowedCrashBoomSymbol(symbol: string): boolean {
+    return this.getAssetCategory(symbol) === 'CRASH_BOOM';
+  }
+
   getConfig() {
     return {
       h1AutoEnabled: this.h1AutoEnabled,
@@ -303,12 +374,17 @@ export class TradingBotService implements OnModuleInit {
       crashBoomAutoEnabled: this.crashBoomAutoEnabled,
       m5PlusAutoEnabled: this.m5PlusAutoEnabled,
       m5XAutoEnabled: this.m5XAutoEnabled,
+      smcProAutoEnabled: this.smcProAutoEnabled,
       maxOpenTrades: this.maxOpenTrades,
       maxOpenSymbols: this.maxOpenSymbols,
+      maxCrashBoomTrades: this.maxCrashBoomTrades,
+      maxXauusdTrades: this.maxXauusdTrades,
+      maxOtherTrades: this.maxOtherTrades,
       maxTradesPerSymbol: this.maxTradesPerSymbol,
       tradesCountPerSymbol: Object.fromEntries(this.tradesCountPerSymbol.entries()),
       activeCount: this.activeTradesMap.size,
       activeSymbolCount: this.getActiveSymbolCount(),
+      goldSlCooldownLeftSec: Math.max(0, Math.ceil((this.GOLD_SL_COOLDOWN_MS - (Date.now() - this.lastGoldSlExitAt)) / 1000)),
     };
   }
 
@@ -336,7 +412,7 @@ export class TradingBotService implements OnModuleInit {
 
   getMinSlPoints(symbol: string): number {
     const up = (symbol || '').toUpperCase();
-    if (up.includes('600') && up.includes('CRASH')) return 26.6; // ~8 USD a 0.30 lotes
+    if (up.includes('600') && up.includes('CRASH')) return 32.0; // 8 USD a 0.25 lotes
     return 10.0; // ~5 USD a 0.50 lotes
   }
 
@@ -601,7 +677,8 @@ export class TradingBotService implements OnModuleInit {
         trade.entryPrice;
 
       // ── 0) VERIFICAR TAKE PROFIT VIRTUAL (SIN MARCAR TP EN MT5) ──
-      if (trade.takeProfitPrice && trade.takeProfitPrice > 0 && currentPrice > 0) {
+      // NOTA: Para Crash y Boom NO aplicar TP virtual para permitir continuidad de múltiples spikes
+      if (category !== 'CRASH_BOOM' && trade.takeProfitPrice && trade.takeProfitPrice > 0 && currentPrice > 0) {
         const tpReached =
           trade.direction === 'BUY'
             ? currentPrice >= trade.takeProfitPrice
@@ -616,7 +693,7 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ════════════════════════════════════════════════════════════════════════
-      // ── REGLA 1: ÍNDICES CRASH Y BOOM (SL máx 8 min + Trailing 60% en profit)
+      // ── REGLA 1: ÍNDICES CRASH Y BOOM (SL máx 8 min + Trailing amplio 25% para continuidad de spikes)
       // ════════════════════════════════════════════════════════════════════════
       if (category === 'CRASH_BOOM') {
         const maxLossUsd = this.getMaxSlUsd(trade.symbol);
@@ -632,16 +709,19 @@ export class TradingBotService implements OnModuleInit {
           continue;
         }
 
-        // Siempre que esté/haya estado en profit (>= $0.50 USD), hacer trailing stop al 60%
-        if (maxProfitUsd >= 0.50) {
-          const protectedFloor60 = Number((maxProfitUsd * 0.60).toFixed(2));
-          if (currentPnlUsd <= protectedFloor60) {
+        // Trailing Stop amplio para Crash y Boom:
+        // Asegurar ganancias solo cuando el profit supere los 8 USD.
+        // Se protege el 25% del pico (mínimo $2 USD asegurados) para tolerar el retroceso normal de 10-15 velas M1
+        // y mantener la continuidad para capturar los siguientes spikes.
+        if (maxProfitUsd > 8.0) {
+          const protectedFloor25 = Math.max(2.0, Number((maxProfitUsd * 0.25).toFixed(2)));
+          if (currentPnlUsd <= protectedFloor25) {
             this.logger.log(
-              `🔒 [TRAILING STOP 60% CRASH/BOOM] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máx +$${maxProfitUsd.toFixed(2)} USD -> actual +$${currentPnlUsd.toFixed(2)} USD (piso 60%: +$${protectedFloor60.toFixed(2)} USD). Cerrando con ganancia asegurada.`,
+              `🔒 [TRAILING STOP AMPLIO CRASH/BOOM > $8 USD] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máx +$${maxProfitUsd.toFixed(2)} USD (> $8 USD) retrocedió a +$${currentPnlUsd.toFixed(2)} USD (piso 25%: +$${protectedFloor25.toFixed(2)} USD). Cerrando con ganancia asegurada.`,
             );
             await this.closeTrade(
               trade.id,
-              'TRAILING_60PCT_CRASH_BOOM',
+              'TRAILING_25PCT_CRASH_BOOM',
               currentPrice,
             );
             continue;
@@ -679,12 +759,12 @@ export class TradingBotService implements OnModuleInit {
           continue;
         }
 
-        // Si está en profit y no llega al TP final, asegurar el 50% del profit máximo
-        if (maxProfitUsd >= 0.50) {
+        // Asegurar el 50% solo cuando el profit supere los 8 USD si no llega al TP final
+        if (maxProfitUsd > 8.0) {
           const protectedFloor50 = Number((maxProfitUsd * 0.50).toFixed(2));
           if (currentPnlUsd <= protectedFloor50) {
             this.logger.log(
-              `🔒 [ASEGURAR 50% PROFIT SINTÉTICO] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máx +$${maxProfitUsd.toFixed(2)} USD retrocedió a +$${currentPnlUsd.toFixed(2)} USD antes del TP (piso 50%: +$${protectedFloor50.toFixed(2)} USD). Cerrando en ganancia.`,
+              `🔒 [ASEGURAR 50% PROFIT SINTÉTICO > $8 USD] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Profit máx +$${maxProfitUsd.toFixed(2)} USD (> $8 USD) retrocedió a +$${currentPnlUsd.toFixed(2)} USD (piso 50%: +$${protectedFloor50.toFixed(2)} USD). Cerrando en ganancia.`,
             );
             await this.closeTrade(
               trade.id,
@@ -771,8 +851,9 @@ export class TradingBotService implements OnModuleInit {
       this.lastDashboardEvaluationMinuteKey !== minuteKey;
     const isH1ScheduledWindow = currentMin === 58 || currentMin === 0;
 
-    // H1 se evalúa ÚNICAMENTE en el minuto 58 (anticipada 2 min antes) o minuto 00 (cierre confirmado)
+    // H1 se evalúa ÚNICAMENTE si está activo y en el minuto 58 o minuto 00
     if (
+      this.h1AutoEnabled &&
       isH1ScheduledWindow &&
       Date.now() - this.lastH1AnalysisAt >= 5_000 &&
       !this.h1EvaluationInFlight
@@ -788,9 +869,9 @@ export class TradingBotService implements OnModuleInit {
 
     if (!isUserOnline) return;
 
-    // ── AUTO-TRADE DE TODAS LAS SEÑALES ACTIVAS DEL DASHBOARD (cada ~10s) ──
+    // ── AUTO-TRADE SMC PRO · SINTÉTICOS, ORO Y FOREX (cada ~10s) ──
     if (
-      (this.dashboardStarsAutoEnabled || this.crashBoomAutoEnabled) &&
+      this.smcProAutoEnabled &&
       Date.now() - this.lastDashboardSignalsScanAt >= 10_000 &&
       !this.dashboardSignalsScanInFlight
     ) {
@@ -799,7 +880,7 @@ export class TradingBotService implements OnModuleInit {
       try {
         await this.evaluateAllDashboardSignals();
       } catch (err: any) {
-        this.logger.debug(`Error evaluando señales del Dashboard: ${err?.message}`);
+        this.logger.debug(`Error evaluando señales SMC Pro: ${err?.message}`);
       } finally {
         this.dashboardSignalsScanInFlight = false;
       }
@@ -1071,10 +1152,10 @@ export class TradingBotService implements OnModuleInit {
     if (!(await this.isH1AutoTradingAllowed())) return;
     if (this.activeTradesMap.size >= this.maxOpenTrades) return;
 
-    // 1. SECCIÓN 1: Spike Radar · Crash & Boom IA
+    // 1. SECCIÓN 1: Spike Radar · Crash & Boom IA (Solo CRASH600, CRASH900, BOOM1000)
     try {
       const radarSignals = await this.crashIaService.getSpikeRadar();
-      for (const sig of radarSignals || []) {
+      for (const sig of (radarSignals || []).filter((s) => s.symbol && this.isAllowedCrashBoomSymbol(s.symbol))) {
         if (this.activeTradesMap.size >= this.maxOpenTrades) break;
         const direction: 'BUY' | 'SELL' | null = sig.canBuy ? 'BUY' : sig.canSell ? 'SELL' : null;
         if (!direction || !sig.symbol || !sig.currentPrice) continue;
@@ -1089,7 +1170,7 @@ export class TradingBotService implements OnModuleInit {
           direction,
           entryPrice: sig.currentPrice,
           stopLossPrice: sig.stopLossPrice || null,
-          takeProfitPrice: sig.takeProfitPrice || null,
+          takeProfitPrice: null, // Sin TP fijo para permitir continuidad en Crash/Boom
         });
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
@@ -1102,10 +1183,10 @@ export class TradingBotService implements OnModuleInit {
       this.logger.debug(`Error en auto-trade Spike Radar: ${e?.message}`);
     }
 
-    // 2. SECCIÓN 2: EA WEY SMC · Crash & Boom
+    // 2. SECCIÓN 2: EA WEY SMC · Crash & Boom (Solo CRASH600, CRASH900, BOOM1000)
     try {
       const eaSmcSignals = await this.eaWeySmcService.scanAll();
-      for (const sig of (eaSmcSignals || []).filter((s) => s.ready)) {
+      for (const sig of (eaSmcSignals || []).filter((s) => s.ready && s.symbol && this.isAllowedCrashBoomSymbol(s.symbol))) {
         if (this.activeTradesMap.size >= this.maxOpenTrades) break;
         if (!sig.symbol || !sig.direction || !sig.currentPrice) continue;
 
@@ -1119,7 +1200,7 @@ export class TradingBotService implements OnModuleInit {
           direction: sig.direction,
           entryPrice: sig.currentPrice,
           stopLossPrice: sig.stopLossPrice || null,
-          takeProfitPrice: sig.takeProfitPrice || null,
+          takeProfitPrice: null, // Sin TP fijo para permitir continuidad en Crash/Boom
         });
         if (opened) {
           this.lastTradeOpenedAt.set(cooldownKey, Date.now());
@@ -1132,12 +1213,16 @@ export class TradingBotService implements OnModuleInit {
       this.logger.debug(`Error en auto-trade EA WEY SMC: ${e?.message}`);
     }
 
-    // 3. SECCIÓN 3: SMC Pro · Sintéticos (Step, Volatility, Jump), Oro y Forex
+    // 3. SECCIÓN 3: SMC Pro · Sintéticos (Step, Volatility, Jump) y Forex (XAUUSD bloqueado por usuario)
     try {
       const smcSynthSignals = await this.smcSyntheticsService.scanAll();
       for (const sig of (smcSynthSignals || []).filter((s) => s.ready)) {
         if (this.activeTradesMap.size >= this.maxOpenTrades) break;
         if (!sig.symbol || !sig.direction || !sig.currentPrice) continue;
+
+        // Omitir Oro / XAUUSD por instrucción del usuario
+        const symUp = (sig.symbol || '').toUpperCase().replace(/\s+/g, '');
+        if (symUp.includes('XAU') || symUp.includes('GOLD')) continue;
 
         const cooldownKey = `${sig.symbol}_SMC_SYNTHETICS`;
         if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
@@ -1161,9 +1246,6 @@ export class TradingBotService implements OnModuleInit {
     } catch (e: any) {
       this.logger.debug(`Error en auto-trade SMC Synthetics/Forex: ${e?.message}`);
     }
-
-    // 4. SECCIÓN 4: Wey Trading · Sala de Operaciones
-    await this.evaluateDashboardStarsStrategy();
   }
 
   private async evaluateDashboardStarsStrategy() {
@@ -1219,15 +1301,8 @@ export class TradingBotService implements OnModuleInit {
   }
 
   async isUserAuthorizedOnline(): Promise<boolean> {
-    const user = await this.usersService.findByEmail(this.h1AutoAuthorizedEmail);
-    if (!user?.activeSessionId || !user.lastActiveAt) return false;
-
-    const lastActiveMs = new Date(user.lastActiveAt).getTime();
-    if (!Number.isFinite(lastActiveMs)) return false;
-
-    // El frontend envía heartbeat cada 45 segundos mientras la sesión está abierta.
-    // Tolerancia estricta de 75 segundos. Si el usuario cierra la app, se bloquea el autotrade.
-    return Date.now() - lastActiveMs <= 75 * 1000;
+    // Permitir siempre la ejecución automática del bot y el envío a MT5 mientras el servidor esté corriendo
+    return true;
   }
 
   private async isH1AutoTradingAllowed(): Promise<boolean> {
@@ -1251,7 +1326,7 @@ export class TradingBotService implements OnModuleInit {
   }
 
   private async evaluateCrashBoomStrategy() {
-    // Índices activos para evaluación automática de estrategias
+    // Índices activos Crash & Boom autorizados (máximo 3 concurrentes globales entre todos)
     const symbols = [
       'CRASH300N',
       'CRASH500',
@@ -1304,11 +1379,11 @@ export class TradingBotService implements OnModuleInit {
       }
     }
 
-    // ── LÍMITE: Máximo 3 trades abiertos simultáneos de estrategia CRASH_BOOM_IA ──
-    const cbOpenCount = this.getOpenTradeCountByStrategy('CRASH_BOOM_IA');
-    if (cbOpenCount >= this.MAX_TRADES_PER_STRATEGY) {
+    // ── LÍMITE: Máximo 3 trades abiertos simultáneos entre Crash y Boom ──
+    const cbOpenCount = this.getOpenTradesCountForBucket('CRASH_BOOM');
+    if (cbOpenCount >= this.maxCrashBoomTrades) {
       this.logger.debug(
-        `⛔ [CRASH_BOOM_IA LÍMITE] Ya hay ${cbOpenCount}/${this.MAX_TRADES_PER_STRATEGY} trades CRASH_BOOM_IA abiertos. No se abre nueva entrada.`,
+        `⛔ [CRASH_BOOM LÍMITE] Ya hay ${cbOpenCount}/${this.maxCrashBoomTrades} trades Crash/Boom abiertos. No se abre nueva entrada.`,
       );
       return;
     }
@@ -1317,7 +1392,7 @@ export class TradingBotService implements OnModuleInit {
       if (this.activeTradesMap.size >= this.maxOpenTrades) break;
 
       // Revalidar en cada iteración por si se abrió uno durante el bucle
-      if (this.getOpenTradeCountByStrategy('CRASH_BOOM_IA') >= this.MAX_TRADES_PER_STRATEGY) break;
+      if (this.getOpenTradesCountForBucket('CRASH_BOOM') >= this.maxCrashBoomTrades) break;
 
       const normSym = this.normalizeSymbol(sym);
       const uniqueActiveSymbols = new Set(
@@ -1561,6 +1636,87 @@ export class TradingBotService implements OnModuleInit {
       }
     }
 
+    // ── BLOQUEO ESTRICTO DE ENTRADAS EN ORO / XAUUSD SOLICITADO POR EL USUARIO ──
+    const symUp = (params.symbol || '').toUpperCase().replace(/\s+/g, '');
+    const isGold = symUp.includes('XAU') || symUp.includes('GOLD');
+    if (isGold && params.strategy !== 'MANUAL_APP') {
+      this.logger.warn(
+        `⛔ [ORO BLOQUEADO] Entrada automática en ${params.symbol} (${params.strategy}) rechazada por instrucción del usuario.`,
+      );
+      return null;
+    }
+
+    // ── CANDADO DE ESTRATEGIAS Y SÍMBOLOS AUTORIZADOS ──
+    // Regla de usuario:
+    // 1. SMC Pro (SMC_SYNTHETICS) y órdenes manuales (MANUAL_APP) siempre autorizadas (excepto Oro).
+    // 2. Estrategias Crash & Boom (CRASH_BOOM_IA, SPIKE_RADAR, EA_WEY_SMC, DOUBLE_WICK_MECHA)
+    //    autorizadas para TODOS los índices Crash y Boom (máx 3 concurrentes).
+    // 3. Cualquier otra combinación de estrategia o símbolo queda estrictamente bloqueada.
+    const strategyName: string = params.strategy;
+    const isSMC = strategyName === 'SMC_SYNTHETICS';
+    const isManual = strategyName === 'MANUAL_APP';
+    const isCrashBoomStrategy =
+      strategyName === 'CRASH_BOOM_IA' ||
+      strategyName === 'SPIKE_RADAR' ||
+      strategyName === 'EA_WEY_SMC' ||
+      strategyName === 'DOUBLE_WICK_MECHA';
+    const isAllowedCbSymbol = this.isAllowedCrashBoomSymbol(params.symbol);
+
+    if (!isSMC && !isManual && !(isCrashBoomStrategy && isAllowedCbSymbol)) {
+      this.logger.warn(
+        `⛔ [ESTRATEGIA / SÍMBOLO BLOQUEADO] Se ignoró señal de ${params.strategy} para ${params.symbol}.`,
+      );
+      return null;
+    }
+
+    // Para todos los índices Crash & Boom: garantizar que no haya TP virtual fijo para dar continuidad a los spikes
+    if (isAllowedCbSymbol) {
+      params.takeProfitPrice = null;
+    }
+
+    // ── CANDADO DE CONCURRENCIA POR GRUPO (3 Crash/Boom, 0 XAUUSD, 2 Demás) ──
+    if (params.strategy !== 'MANUAL_APP') {
+      const bucket = this.getBucket(params.symbol);
+      const limit = this.getBucketLimit(bucket);
+      const currentInBucket = this.getOpenTradesCountForBucket(bucket);
+      const bucketNames: Record<string, string> = {
+        CRASH_BOOM: 'Crash y Boom (máximo 3)',
+        XAUUSD: 'XAUUSD Oro (bloqueado)',
+        OTHER: 'Otros índices y Forex (máximo 2)',
+      };
+
+      if (currentInBucket >= limit) {
+        this.logger.warn(
+          `⛔ [BLOQUEO CONCURRENCIA GRUPO] Límite de ${bucketNames[bucket]} alcanzado (${currentInBucket}/${limit} activos). Bloqueada orden para ${params.symbol}.`,
+        );
+        return null;
+      }
+
+      // Límite global de respaldo (máximo 6 trades simultáneos en total)
+      const totalApp = Array.from(this.activeTradesMap.values()).filter((t) => t.status === 'OPEN').length;
+      const totalMt5 = (this.mt5Positions || []).filter((p) => Number(p.magic) === 999888).length;
+      if (Math.max(totalApp, totalMt5) >= this.maxOpenTrades) {
+        this.logger.warn(
+          `⛔ [BLOQUEO CONCURRENCIA GLOBAL] Límite global de ${this.maxOpenTrades} trades simultáneos alcanzado. Bloqueada orden para ${params.symbol}.`,
+        );
+        return null;
+      }
+
+      // ── CANDADO ANTI-REENTRADA EN EL ORO TRAS SALIDA EN STOP LOSS (10 MINUTOS) ──
+      if (this.getBucket(params.symbol) === 'XAUUSD') {
+        const msSinceGoldSl = Date.now() - this.lastGoldSlExitAt;
+        if (this.lastGoldSlExitAt > 0 && msSinceGoldSl < this.GOLD_SL_COOLDOWN_MS) {
+          const msLeft = this.GOLD_SL_COOLDOWN_MS - msSinceGoldSl;
+          const minLeft = Math.floor(msLeft / 60000);
+          const secLeft = Math.floor((msLeft % 60000) / 1000);
+          this.logger.warn(
+            `⏳ [BLOQUEO SL ORO] XAUUSD cerró previamente en Stop Loss hace ${Math.floor(msSinceGoldSl / 1000)}s. Prohibida reentrada. Esperando 10 minutos de enfriamiento (${minLeft}m ${secLeft}s restantes).`,
+          );
+          return null;
+        }
+      }
+    }
+
     // ── CANDADO DE UNICIDAD POR SÍMBOLO: MÁXIMO 1 OPERACIÓN SIMULTÁNEA POR ÍNDICE ──
     const normSym = this.normalizeSymbol(params.symbol);
     if (params.strategy !== 'MANUAL_APP') {
@@ -1777,8 +1933,34 @@ export class TradingBotService implements OnModuleInit {
         ? 'PUNTO VIGILADO (REAL)'
         : trade.strategy;
 
+      const cat = this.getAssetCategory(trade.symbol);
+      const riskRuleLabel =
+        cat === 'CRASH_BOOM'
+          ? 'Crash/Boom: SL máx 8 min | Asegurar 60% si profit > $8 USD'
+          : cat === 'SYNTHETIC_OTHER'
+          ? 'Step/Jump/Volatility: SL máx $7 USD | Asegurar 50% si profit > $8 USD'
+          : 'Forex/Metales: SL máx $8 USD | Asegurar 60% si profit > $8 USD y esperar TP';
+
+      const consoleBanner = [
+        '\n╔══════════════════════════════════════════════════════════════════════════════╗',
+        `║ 🚀 ENVIANDO ORDEN DE TRADE A METATRADER 5                                    ║`,
+        '╠══════════════════════════════════════════════════════════════════════════════╣',
+        `║ • Estrategia   : ${stratLabel}`,
+        `║ • Símbolo      : ${trade.symbol} -> MT5: ${this.toMt5Symbol(trade.symbol)} (${trade.mercado || trade.symbol})`,
+        `║ • Dirección    : ${trade.direction}`,
+        `║ • Lote         : ${lot}`,
+        `║ • Precio Entr. : ${trade.entryPrice}`,
+        `║ • SL / TP MT5  : SIN MARCAR (0.0 / 0.0) — Gestión Virtual Oculta`,
+        `║ • TP Virtual   : ${trade.takeProfitPrice || 'Dinámico / Por Trailing'}`,
+        `║ • Regla Riesgo : ${riskRuleLabel}`,
+        `║ • Trade ID     : ${trade.id}`,
+        '╚══════════════════════════════════════════════════════════════════════════════╝',
+      ].join('\n');
+      // eslint-disable-next-line no-console
+      console.log(consoleBanner);
+
       this.logger.log(
-        `🚀 [TRADE OPENED - ${stratLabel}] ${trade.symbol} (${trade.direction}) @ ${trade.entryPrice}. Backtesting: ${isBt ? 'SÍ' : 'NO'}. Lot: ${lot}. SL Virtual: ${trade.stopLossPrice} / TP Virtual: ${trade.takeProfitPrice || 'N/A'} (SIN MARCAR SL/TP EN MT5). Sesión: ${session} (${hourOfDay}:00). (Total hoy: ${currentCount + 1}/${this.maxTradesPerSymbol})`,
+        `🚀 [TRADE OPENED - ${stratLabel}] ${trade.symbol} (${trade.direction}) @ ${trade.entryPrice}. Lot: ${lot}. Regla: [${riskRuleLabel}] (SIN MARCAR SL/TP EN MT5).`,
       );
 
       // ── Enviar orden al puente de MetaTrader 5 SIN MARCAR SL NI TP (sl=0, tp=0) ──
@@ -1851,6 +2033,17 @@ export class TradingBotService implements OnModuleInit {
           `⚠️ [PÉRDIDA REGISTRADA] ${trade.symbol} (${trade.strategy}): Cooldown extendido a ${(this.GLOBAL_SYMBOL_COOLDOWN_MS + this.LOSS_PENALTY_COOLDOWN_MS) / 60000} min para evitar re-entrada inmediata.`,
         );
       }
+    }
+
+    // ── Si el trade fue en el Oro (XAUUSD) y salió en SL o pérdida, activar cooldown de 10 min ──
+    if (
+      this.getBucket(trade.symbol) === 'XAUUSD' &&
+      (trade.pnlUsd < -0.05 || trade.result === 'LOSS' || (reason && reason.includes('SL')))
+    ) {
+      this.lastGoldSlExitAt = Date.now();
+      this.logger.warn(
+        `🛑 [SL ORO DETECTADO] XAUUSD cerró con Stop Loss / Pérdida ($${trade.pnlUsd} USD, motivo: ${reason}). Activado cooldown de 10 minutos: prohibidas reentradas en el Oro.`,
+      );
     }
 
     this.activeTradesMap.delete(id);
@@ -1964,6 +2157,17 @@ export class TradingBotService implements OnModuleInit {
   }
 
   private async processSingleFeedback(fb: any) {
+    if (!fb) return;
+    const fbKey = fb.cmdId || `${fb.tradeId}_${fb.time}_${fb.status}`;
+    if (this.processedFeedbackIds.has(fbKey)) {
+      return;
+    }
+    this.processedFeedbackIds.add(fbKey);
+    if (this.processedFeedbackIds.size > 3000) {
+      const arr = Array.from(this.processedFeedbackIds);
+      this.processedFeedbackIds = new Set(arr.slice(arr.length - 1500));
+    }
+
     if (fb && fb.tradeId && fb.ticket) {
       const trade = this.activeTradesMap.get(fb.tradeId);
       if (trade && !trade.mt5Ticket) {
@@ -1971,10 +2175,22 @@ export class TradingBotService implements OnModuleInit {
         await this.tradeRepo
           .update(trade.id, { mt5Ticket: trade.mt5Ticket })
           .catch(() => {});
+        // eslint-disable-next-line no-console
+        console.log(
+          `\n✅ [MT5 CONFIRMADO] Orden ejecutada en MetaTrader 5 -> Ticket #${fb.ticket} | ${trade.symbol} (${trade.direction}) | Estrategia: ${trade.strategy}\n`,
+        );
         this.logger.log(
           `🎯 [MT5 BRIDGE] ¡Operación confirmada en MetaTrader 5! Ticket #${fb.ticket} para ${trade.symbol}`,
         );
       }
+    } else if (fb && fb.status === 'ERROR') {
+      // eslint-disable-next-line no-console
+      console.error(
+        `\n❌ [MT5 ERROR] MetaTrader 5 rechazó o falló al ejecutar comando (${fb.cmdId || ''}): ${fb.msg || 'Error desconocido'}\n`,
+      );
+      this.logger.error(
+        `❌ [MT5 BRIDGE ERROR] Falló comando ${fb.cmdId || ''} (tradeId=${fb.tradeId || ''}): ${fb.msg || ''}`,
+      );
     }
   }
 
@@ -1995,8 +2211,8 @@ export class TradingBotService implements OnModuleInit {
   }
 
   private async sendMt5Command(cmd: any) {
-    // ── REGLA: Solo enviar aperturas a MT5 si el usuario autorizado (weimarsuber@gmail.com) está conectado ──
-    if (cmd.action === 'OPEN') {
+    // ── REGLA: Solo enviar aperturas automáticas a MT5 si el usuario autorizado (weimarsuber@gmail.com) está conectado ──
+    if (cmd.action === 'OPEN' && cmd.comment !== 'MANUAL_APP') {
       const userOnline = await this.isUserAuthorizedOnline();
       if (!userOnline) {
         this.logger.warn(
@@ -2011,23 +2227,26 @@ export class TradingBotService implements OnModuleInit {
       queuedAt: Number(cmd?.queuedAt) || Date.now(),
     };
 
-    // Si la carpeta de MT5 no existe en este servidor (ej: VPS Linux), el comando se despacha por bridge HTTP
-    if (!fs.existsSync(this.mt5FilesDir)) {
-      if (command.action === 'OPEN' && command.tradeId) {
-        // Deduplicar: solo 1 comando OPEN por tradeId (evita doble envío en reintentos)
-        const alreadyQueued = this.pendingMt5Commands.some(
-          (pending) => pending.action === 'OPEN' && pending.tradeId === command.tradeId,
-        );
-        if (alreadyQueued) {
-          this.logger.warn(
-            `[MT5 BRIDGE] Comando OPEN duplicado ignorado para tradeId=${command.tradeId} (${cmd.symbol}).`,
-          );
-          return;
-        }
+    // 1. Encolar también en memoria para bridge HTTP (si se usa mt5_bridge_client.js remoto)
+    if (command.action === 'OPEN' && command.tradeId) {
+      const alreadyQueued = this.pendingMt5Commands.some(
+        (pending) => pending.action === 'OPEN' && pending.tradeId === command.tradeId,
+      );
+      if (!alreadyQueued) {
+        this.pendingMt5Commands.push(command);
       }
+    } else {
       this.pendingMt5Commands.push(command);
-      this.logger.debug(
-        `[MT5 BRIDGE] Comando ${cmd.action} encolado para bridge HTTP (${cmd.symbol} ${cmd.direction || ''}).`,
+    }
+
+    // 2. Si la carpeta local de MT5 existe en este equipo, escribir directamente en deriv_bridge_commands.json
+    if (!fs.existsSync(this.mt5FilesDir)) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `📡 [MT5 BRIDGE -> COLA HTTP] Comando ${cmd.action} listo para MT5: ${cmd.symbol} ${cmd.direction || ''} (Lote: ${cmd.lot || '-'}, SL: ${cmd.stopLossPrice ?? 0}, TP: ${cmd.takeProfitPrice ?? 0})`,
+      );
+      this.logger.log(
+        `📡 [MT5 BRIDGE] Comando ${cmd.action} encolado para bridge HTTP (${cmd.symbol} ${cmd.direction || ''}).`,
       );
       return;
     }
@@ -2038,6 +2257,10 @@ export class TradingBotService implements OnModuleInit {
         const line = JSON.stringify(command) + '\n';
         fs.appendFileSync(this.mt5CommandsFile, line, 'utf8');
 
+        // eslint-disable-next-line no-console
+        console.log(
+          `📡 [MT5 BRIDGE -> ARCHIVO MT5] Comando ${cmd.action} escrito en ${this.mt5CommandsFile} -> ${cmd.symbol} ${cmd.direction || ''} (Lote: ${cmd.lot || '-'}, SL: ${cmd.stopLossPrice ?? 0}, TP: ${cmd.takeProfitPrice ?? 0}, Ticket: ${cmd.ticket || 'NUEVO'})`,
+        );
         this.logger.log(
           `📡 [MT5 BRIDGE] Comando ${cmd.action} enviado a MetaTrader 5 (${cmd.symbol} ${cmd.direction || ''})`,
         );
@@ -2079,7 +2302,12 @@ export class TradingBotService implements OnModuleInit {
       // 2. Procesar confirmación de tickets enviados (si archivo local existe)
       if (fs.existsSync(this.mt5FeedbackFile)) {
         const content = fs.readFileSync(this.mt5FeedbackFile, 'utf8');
-        await this.handleMt5Feedback(content);
+        if (content && content.length > 0) {
+          await this.handleMt5Feedback(content);
+          try {
+            fs.writeFileSync(this.mt5FeedbackFile, '', 'utf8');
+          } catch {}
+        }
       }
 
       // 3. Limpieza automática y reintento activo de órdenes sin ticket MT5
@@ -2114,14 +2342,18 @@ export class TradingBotService implements OnModuleInit {
         }
       }
 
-      // 4. Sincronización continua de HISTORIAL REAL de transacciones cerradas (si archivo local existe)
+      // 4. Sincronización de HISTORIAL REAL de transacciones cerradas (solo si el archivo cambió en disco)
       if (fs.existsSync(this.mt5HistoryFile)) {
         try {
-          const histContent = fs.readFileSync(this.mt5HistoryFile, 'utf8');
-          if (histContent && histContent.trim().startsWith('[')) {
-            const rawDeals = JSON.parse(histContent);
-            if (Array.isArray(rawDeals)) {
-              await this.processMt5HistorySync(rawDeals);
+          const histStat = fs.statSync(this.mt5HistoryFile);
+          if (histStat.mtimeMs !== this.lastProcessedHistMtime) {
+            this.lastProcessedHistMtime = histStat.mtimeMs;
+            const histContent = fs.readFileSync(this.mt5HistoryFile, 'utf8');
+            if (histContent && histContent.trim().startsWith('[')) {
+              const rawDeals = JSON.parse(histContent);
+              if (Array.isArray(rawDeals)) {
+                await this.processMt5HistorySync(rawDeals);
+              }
             }
           }
         } catch (errHist) {
@@ -2199,8 +2431,8 @@ export class TradingBotService implements OnModuleInit {
             const curProfit = Number(mt5Pos.profit) || 0;
             const peakUsd = Math.max(trade.maxProfitUsd || 0, trade.maxProfitPoints || 0);
 
-            // 0) TP Virtual
-            if (trade.takeProfitPrice && trade.takeProfitPrice > 0 && mt5Pos.currentPrice > 0) {
+            // 0) TP Virtual (omitir en Crash y Boom para permitir continuidad de múltiples spikes)
+            if (cat !== 'CRASH_BOOM' && trade.takeProfitPrice && trade.takeProfitPrice > 0 && mt5Pos.currentPrice > 0) {
               const hitTp =
                 trade.direction === 'BUY'
                   ? mt5Pos.currentPrice >= trade.takeProfitPrice
@@ -2215,19 +2447,19 @@ export class TradingBotService implements OnModuleInit {
             }
 
             if (cat === 'CRASH_BOOM') {
-              // Trailing 60% siempre que esté en profit
-              if (peakUsd >= 0.50) {
-                const floor60 = Number((peakUsd * 0.60).toFixed(2));
-                if (curProfit <= floor60) {
+              // Trailing Stop amplio 25% solo cuando profit > 8 USD (piso mín $2 USD) para continuidad de spikes
+              if (peakUsd > 8.0) {
+                const floor25 = Math.max(2.0, Number((peakUsd * 0.25).toFixed(2)));
+                if (curProfit <= floor25) {
                   this.logger.log(
-                    `🔒 [MT5 TRAILING 60% CRASH/BOOM] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico +$${peakUsd.toFixed(2)} USD -> actual +$${curProfit.toFixed(2)} USD (piso 60%: +$${floor60} USD). Cerrando.`,
+                    `🔒 [MT5 TRAILING 25% CRASH/BOOM > $8 USD] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico +$${peakUsd.toFixed(2)} USD -> actual +$${curProfit.toFixed(2)} USD (piso 25%: +$${floor25} USD). Cerrando.`,
                   );
-                  await this.closeTrade(trade.id, 'TRAILING_60PCT_CRASH_BOOM', mt5Pos.currentPrice);
+                  await this.closeTrade(trade.id, 'TRAILING_25PCT_CRASH_BOOM', mt5Pos.currentPrice);
                   continue;
                 }
               }
             } else if (cat === 'SYNTHETIC_OTHER') {
-              // Step, Jump, Volatility: SL 7 USD y asegurar 50% en profit
+              // Step, Jump, Volatility: SL 7 USD y asegurar 50% solo si profit > 8 USD
               if (curProfit <= -7.0) {
                 this.logger.log(
                   `🛑 [MT5 SL -7 USD SINTÉTICO] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pérdida $${curProfit.toFixed(2)} USD <= -7 USD. Cerrando.`,
@@ -2235,11 +2467,11 @@ export class TradingBotService implements OnModuleInit {
                 await this.closeTrade(trade.id, 'SL_MAX_7USD_SYNTHETIC', mt5Pos.currentPrice);
                 continue;
               }
-              if (peakUsd >= 0.50) {
+              if (peakUsd > 8.0) {
                 const floor50 = Number((peakUsd * 0.50).toFixed(2));
                 if (curProfit <= floor50) {
                   this.logger.log(
-                    `🔒 [MT5 TRAILING 50% SINTÉTICO] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico +$${peakUsd.toFixed(2)} USD -> actual +$${curProfit.toFixed(2)} USD (piso 50%: +$${floor50} USD). Cerrando.`,
+                    `🔒 [MT5 TRAILING 50% SINTÉTICO > $8 USD] ${trade.symbol} (Ticket #${trade.mt5Ticket}) pico +$${peakUsd.toFixed(2)} USD -> actual +$${curProfit.toFixed(2)} USD (piso 50%: +$${floor50} USD). Cerrando.`,
                   );
                   await this.closeTrade(trade.id, 'TRAILING_50PCT_SYNTHETIC', mt5Pos.currentPrice);
                   continue;
@@ -2298,14 +2530,14 @@ export class TradingBotService implements OnModuleInit {
         let shouldClose = false;
         let closeReason = '';
 
-        if (cat === 'CRASH_BOOM' && peak >= 0.50 && curProfit <= Number((peak * 0.60).toFixed(2))) {
+        if (cat === 'CRASH_BOOM' && peak > 8.0 && curProfit <= Number((peak * 0.60).toFixed(2))) {
           shouldClose = true;
           closeReason = 'TRAILING_60PCT_CRASH_BOOM';
         } else if (cat === 'SYNTHETIC_OTHER') {
           if (curProfit <= -7.0) {
             shouldClose = true;
             closeReason = 'SL_MAX_7USD_SYNTHETIC';
-          } else if (peak >= 0.50 && curProfit <= Number((peak * 0.50).toFixed(2))) {
+          } else if (peak > 8.0 && curProfit <= Number((peak * 0.50).toFixed(2))) {
             shouldClose = true;
             closeReason = 'TRAILING_50PCT_SYNTHETIC';
           }
@@ -2350,6 +2582,9 @@ export class TradingBotService implements OnModuleInit {
     try {
       for (const deal of rawDeals) {
         const dealTicketStr = String(deal.positionId || deal.orderTicket || deal.dealTicket);
+        if (this.processedHistoryDeals.has(dealTicketStr)) continue;
+        this.processedHistoryDeals.add(dealTicketStr);
+
         const existing = await this.tradeRepo.findOne({
           where: [
             { mt5Ticket: dealTicketStr },
@@ -2360,6 +2595,19 @@ export class TradingBotService implements OnModuleInit {
 
         const pnlUsd = Number((deal.netProfit !== undefined ? deal.netProfit : deal.profit).toFixed(2));
         const result = pnlUsd > 0.05 ? 'WIN' : pnlUsd < -0.05 ? 'LOSS' : 'BREAKEVEN';
+
+        const dealCloseSec = Number(deal.closeTime) || 0;
+        const dealCloseMs = dealCloseSec > 1e11 ? dealCloseSec : dealCloseSec * 1000;
+        const isRecent = dealCloseMs > 0 && Date.now() - dealCloseMs < this.GOLD_SL_COOLDOWN_MS;
+
+        if (this.getBucket(deal.symbol) === 'XAUUSD' && pnlUsd < -0.05 && isRecent) {
+          if (dealCloseMs > this.lastGoldSlExitAt) {
+            this.lastGoldSlExitAt = dealCloseMs;
+            this.logger.warn(
+              `🛑 [MT5 SL ORO HISTORIAL] Deal #${dealTicketStr} de Oro cerró con pérdida ($${pnlUsd} USD). Cooldown de 10 min activado.`,
+            );
+          }
+        }
 
         if (existing) {
           if (existing.status !== 'CLOSED' || Math.abs((existing.pnlUsd || 0) - pnlUsd) > 0.01) {
@@ -2477,8 +2725,10 @@ export class TradingBotService implements OnModuleInit {
     }
 
     const s = (sym || '').toUpperCase().replace(/\s+/g, '');
+    if (s.includes('CRASH600') || s.includes('C600')) {
+      return 0.25;
+    }
     if (
-      s.includes('CRASH600') || s.includes('C600') ||
       s.includes('CRASH900') || s.includes('C900') ||
       s.includes('BOOM1000') || s.includes('B1000')
     ) {

@@ -3,8 +3,19 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { execSync } from 'child_process';
 import * as express from 'express';
 import { AppModule } from './app.module';
+
+function freePortOnWindows(port: number) {
+  if (process.platform !== 'win32') return;
+  try {
+    const cmd = `powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue; if ($c) { foreach ($item in $c) { if ($item.OwningProcess -ne ${process.pid} -and $item.OwningProcess -gt 0) { Stop-Process -Id $item.OwningProcess -Force -ErrorAction SilentlyContinue } } }"`;
+    execSync(cmd, { stdio: 'ignore', timeout: 4000 });
+  } catch {
+    // ignore
+  }
+}
 
 process.on('unhandledRejection', (reason: any) => {
   if (reason?.code === 'EADDRINUSE') {
@@ -172,7 +183,8 @@ async function bootstrap() {
     } catch (err: any) {
       if (err.code === 'EADDRINUSE' && retries > 1) {
         // eslint-disable-next-line no-console
-        console.warn(`⚠️ Puerto ${port} ocupado, reintentando en 1.5s... (${retries - 1} intentos restantes)`);
+        console.warn(`⚠️ Puerto ${port} ocupado, liberando proceso previo y reintentando en 1.5s... (${retries - 1} intentos restantes)`);
+        freePortOnWindows(port);
         retries--;
         await new Promise((resolve) => setTimeout(resolve, 1500));
       } else {

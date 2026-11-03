@@ -153,8 +153,8 @@ input double           BreakEvenLockATR   = 0.1;            // ganancia asegurad
 input int              TrailMode          = 2;              // 0=ATR, 1=estructura (swing), 2=hibrido (swing con tope ATR)
 input double           TrailSwingBufferATR = 0.2;           // colchon bajo/sobre el swing usado como trailing (x ATR)
 input double           TrailMaxDistanceATR = 3.0;           // modo hibrido: el SL nunca queda mas lejos que esto (x ATR)
-input double           SpikeTightenATR    = 4.0;            // si el avance supera X ATR (spike) se aprieta el trailing (0 = off)
-input double           SpikeTrailDistanceATR = 0.6;         // distancia del trailing tras spike (x ATR)
+input double           SpikeTightenATR    = 0.0;            // Desactivado (0 = off) para dar continuidad
+input double           SpikeTrailDistanceATR = 2.5;         // distancia del trailing tras spike (x ATR)
 input int              MaxOpenPositions   = 2;
 input int              MaxPositionsPerIndex = 2;            // tope duro de posiciones por indice, valga la ruta de entrada que sea
 input double           SecondEntryMinProfitUSD = 10.0;      // la 2da entrada solo si la 1ra esta en ganancia >= X (moneda de cuenta)
@@ -1849,7 +1849,14 @@ double CalcLots(const int dir, const double entry, const double sl)
       return 0;
    }
    ENUM_ORDER_TYPE ot = (dir > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   double lots = FixedLotSize;
+   double baseLot = FixedLotSize;
+   string symUpper = _Symbol;
+   StringToUpper(symUpper);
+   if(StringFind(symUpper, "CRASH 600") >= 0 || StringFind(symUpper, "CRASH600") >= 0 || StringFind(symUpper, "C600") >= 0)
+   {
+      baseLot = 0.25;
+   }
+   double lots = baseLot;
    double volumeMin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double volumeStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    int volumeDigits = 0;
@@ -1872,7 +1879,7 @@ double CalcLots(const int dir, const double entry, const double sl)
       double estimatedLoss = MathMax(0.0, -pnl);
       if(estimatedLoss > MaxLossPerTradeUSD)
       {
-         lots = MathFloor((FixedLotSize * MaxLossPerTradeUSD / estimatedLoss) /
+         lots = MathFloor((baseLot * MaxLossPerTradeUSD / estimatedLoss) /
                           volumeStep + 1e-8) * volumeStep;
          lots = NormalizeDouble(lots, volumeDigits);
 

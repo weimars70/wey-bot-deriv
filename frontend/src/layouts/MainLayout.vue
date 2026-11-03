@@ -222,8 +222,18 @@
           <q-item-section avatar><q-icon name="bolt" color="amber-5" /></q-item-section>
           <q-item-section>
             <div class="row items-center justify-between">
-              <span class="text-weight-bold text-amber-3">Patrones Spike IA Â· Crash &amp; Boom</span>
+              <span class="text-weight-bold text-amber-3">Patrones Spike IA · Crash &amp; Boom</span>
               <q-badge color="amber-8" text-color="black" label="MULTI" class="text-weight-bolder" />
+            </div>
+          </q-item-section>
+        </q-item>
+
+        <q-item clickable to="/crash-ia">
+          <q-item-section avatar><q-icon name="candlestick_chart" color="purple-5" /></q-item-section>
+          <q-item-section>
+            <div class="row items-center justify-between">
+              <span class="text-weight-bold text-purple-3">Gráficas Crash/Boom · Patrón V</span>
+              <q-badge color="purple-8" label="ZONAS V" class="text-weight-bold" />
             </div>
           </q-item-section>
         </q-item>

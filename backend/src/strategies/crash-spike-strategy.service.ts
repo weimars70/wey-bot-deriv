@@ -156,7 +156,7 @@ export class CrashSpikeStrategyService {
       return { spikeMinDrop: 15.0, tolerancePts: 5.0, slPts: 12, recommendedLot: 0.30, greenRunTarget: 10, retraceMin: 38, retraceMax: 65, direction };
     }
     if (up.includes('600')) {
-      return { spikeMinDrop: 12.0, tolerancePts: 4.5, slPts: 12, recommendedLot: 0.30, greenRunTarget: 10, retraceMin: 38, retraceMax: 65, direction };
+      return { spikeMinDrop: 12.0, tolerancePts: 4.5, slPts: 12, recommendedLot: 0.25, greenRunTarget: 10, retraceMin: 38, retraceMax: 65, direction };
     }
     if (up.includes('900')) {
       return { spikeMinDrop: 10.0, tolerancePts: 4.0, slPts: 10, recommendedLot: 0.40, greenRunTarget: 10, retraceMin: 38, retraceMax: 65, direction };

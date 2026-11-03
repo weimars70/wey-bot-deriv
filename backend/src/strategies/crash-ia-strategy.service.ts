@@ -166,6 +166,8 @@ export class CrashIaStrategyService {
   private readonly evaluationCache = new Map<string, { expiresAt: number; value: CrashIaEvaluation }>();
   private readonly evaluationsInFlight = new Map<string, Promise<CrashIaEvaluation>>();
   private readonly watchedLevelsCache = new Map<string, { expiresAt: number; rows: WatchedEntryLevel[] }>();
+  private summaryCache: { expiresAt: number; value: Omit<CrashIaEvaluation, 'chartCandles'>[] } | null = null;
+  private summaryInFlight: Promise<Omit<CrashIaEvaluation, 'chartCandles'>[]> | null = null;
 
   constructor(
     private readonly candlesService: CandlesService,
@@ -661,11 +663,35 @@ export class CrashIaStrategyService {
    * Resumen rápido de todos los índices Crash y Boom (secuencial para no abrir múltiples conexiones en BD).
    */
   async getSummaryAll(): Promise<Omit<CrashIaEvaluation, 'chartCandles'>[]> {
-    const list: CrashIaEvaluation[] = [];
-    for (const s of CRASH_BOOM_IA_SYMBOLS) {
-      list.push(await this.evaluateSymbol(s.symbol, 5));
+    if (this.summaryCache && this.summaryCache.expiresAt > Date.now()) {
+      return this.summaryCache.value;
     }
-    return list.map(({ chartCandles, ...rest }) => rest);
+    if (this.summaryInFlight) {
+      return this.summaryInFlight;
+    }
+
+    this.summaryInFlight = (async () => {
+      try {
+        const list: CrashIaEvaluation[] = [];
+        for (const s of CRASH_BOOM_IA_SYMBOLS) {
+          try {
+            list.push(await this.evaluateSymbol(s.symbol, 5));
+          } catch (e: any) {
+            this.logger.warn(`Error evaluando ${s.symbol} en getSummaryAll: ${e?.message}`);
+          }
+        }
+        const mapped = list.map(({ chartCandles, ...rest }) => rest);
+        this.summaryCache = {
+          expiresAt: Date.now() + 15000,
+          value: mapped,
+        };
+        return mapped;
+      } finally {
+        this.summaryInFlight = null;
+      }
+    })();
+
+    return this.summaryInFlight;
   }
 
   async evaluateDoubleWickMecha(symbol: string, timeframeSeconds = 300): Promise<{

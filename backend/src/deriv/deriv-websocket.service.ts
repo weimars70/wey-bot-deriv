@@ -124,8 +124,14 @@ export class DerivWebsocketService implements OnModuleInit, OnModuleDestroy {
       });
     }, 25_000);
 
+    const useOtp = this.config.get<string>('DERIV_USE_OTP', 'false') === 'true';
     const token = this.config.get<string>('DERIV_API_TOKEN');
-    if (token) {
+    if (useOtp) {
+      // En el endpoint WebSocket OTP (/trading/v1/options/ws/...) la sesión ya viene autenticada por el OTP en la URL
+      // y no existe el método "authorize" (enviarlo devuelve UnknownMethod).
+      this.isAuthorized = true;
+      this.logger.log('🔐 Conexión OTP autenticada directamente mediante URL firmada.');
+    } else if (token) {
       // Mostrar solo una parte del token para confirmar que se leyó (no imprimir secretos completos)
       this.logger.log(`DERIV_API_TOKEN cargado: ${token.slice(0, 6)}... (long=${token.length})`);
       try {

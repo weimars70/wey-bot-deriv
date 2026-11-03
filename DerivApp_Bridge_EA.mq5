@@ -18,10 +18,14 @@ input double   DefaultLotSize          = 1.00;           // Lotaje por defecto s
 input ulong    BridgeMagicNumber       = 999888;         // Magic Number de las operaciones del puente
 input bool     ProtectAllPositions     = false;          // Si es true, permite gestionar operaciones manuales. Dejar en FALSE para NUNCA tocar trades manuales.
 input double   ProfitProtectionPercent = 70.0;           // Porcentaje a PROTEGER del pico maximo (ej: 70 = asegura el 70% de la ganancia)
-input double   MinProfitThresholdUSD   = 15.00;          // Ganancia minima acumulada en USD para activar la proteccion de trailing del EA (minimo $15 USD). Los spikes menores a $15 son gestionados por la logica de 5 min del backend.
+input double   MinProfitThresholdUSD   = 8.00;           // Ganancia minima acumulada en USD para activar la proteccion de trailing (8.00 USD)
 input int      PollIntervalMs          = 400;            // Frecuencia de sincronizacion (milisegundos)
 input int      SlippagePoints          = 20;             // Desviacion maxima permitida (puntos)
 input int      M5XHistoryCandles       = 9000;           // Historial M5 exportado por indice (~31 dias)
+input group "=== Limites de Concurrencia por Grupo ==="
+input int      MaxCrashBoomTrades      = 3;              // Maximo concurrentes en Crash y Boom (3)
+input int      MaxXauusdTrades         = 1;              // Maximo concurrentes en XAUUSD (1)
+input int      MaxOtherTrades          = 2;              // Maximo concurrentes en los demas indices y forex (2)
 input int      NoSpikeTimeoutM1Bars    = 8;              // SL maximo en Crash/Boom: 8 minutos (8 velas M1)
 
 input group "=== Configuracion de Stop Loss Monetario ==="
@@ -182,6 +186,16 @@ void CheckMonetaryStopLoss()
          if(trade.PositionClose(ticket))
          {
             WriteFeedback("sl_monetary", "", "CLOSED", ticket, "Closed by MaxLossUSD Stop Loss");
+            if(GetSymbolBucket(posSym) == 1)
+            {
+               GlobalVariableSet("DAPP_GOLD_SL_TIME", (double)TimeCurrent());
+               Print("⏳ [DerivApp Bridge] Cooldown de 10 minutos activado para XAUUSD tras salida en Stop Loss monetario.");
+            }
+            if(GetSymbolBucket(posSym) == 1) // 1 es XAUUSD / ORO
+            {
+               GlobalVariableSet("DAPP_GOLD_SL_TIME", (double)TimeCurrent());
+               Print("⏳ [DerivApp Bridge] Cooldown de 10 minutos activado para XAUUSD tras salida en Stop Loss monetario.");
+            }
          }
       }
    }
@@ -230,17 +244,17 @@ void ProtectProfitTarget()
       
       if(cat == 0)
       {
-         // Crash y Boom: siempre que este en profit, trailing stop al 60%
-         if(maxProf >= 0.50)
+         // Crash y Boom: asegurar al 60% solo si el profit superó los 8 USD
+         if(maxProf > 8.00)
          {
             shouldCheckTrailing = true;
-            ratio = 0.60;
+            ratio = 0.25; // 25% piso para tolerar retrocesos normales de velas M1
          }
       }
       else if(cat == 1)
       {
-         // Step, Jump, Volatility: si esta en profit, asegurar el 50% si no llega al TP final
-         if(maxProf >= 0.50)
+         // Step, Jump, Volatility: asegurar el 50% solo si el profit superó los 8 USD
+         if(maxProf > 8.00)
          {
             shouldCheckTrailing = true;
             ratio = 0.50;
@@ -248,7 +262,7 @@ void ProtectProfitTarget()
       }
       else if(cat == 2)
       {
-         // Forex y Metales: asegurar el 60% cuando este en profit mayor a 8 USD
+         // Forex y Metales: asegurar el 60% solo cuando profit > 8 USD
          if(maxProf > 8.00)
          {
             shouldCheckTrailing = true;
@@ -259,6 +273,7 @@ void ProtectProfitTarget()
       if(shouldCheckTrailing)
       {
          double floorProfit = NormalizeDouble(maxProf * ratio, 2);
+         if(cat == 0 && floorProfit < 2.00) floorProfit = 2.00; // Minimo  USD asegurados en Crash/Boom
          if(profit <= floorProfit)
          {
             Print("🛡️ [DerivApp Bridge] ¡TRAILING STOP ", DoubleToString(ratio * 100.0, 0), "% ACTIVADO! ", posSym,
@@ -406,6 +421,21 @@ string NormalizeSymbol(string webSymbol)
 }
 
 //+------------------------------------------------------------------+
+//| Clasificar simbolo en bucket para limites de concurrencia        |
+//| 0: Crash/Boom (max 3)                                            |
+//| 1: XAUUSD (max 1)                                                |
+//| 2: Otros indices y Forex (max 2)                                 |
+//+------------------------------------------------------------------+
+int GetSymbolBucket(string sym)
+{
+   string up = sym;
+   StringToUpper(up);
+   if(StringFind(up, "CRASH") >= 0 || StringFind(up, "BOOM") >= 0) return 0;
+   if(StringFind(up, "XAU") >= 0 || StringFind(up, "GOLD") >= 0)   return 1;
+   return 2;
+}
+
+//+------------------------------------------------------------------+
 //| Obtener lotaje seguro segun el activo                           |
 //+------------------------------------------------------------------+
 double GetSafeLot(string sym, double desiredLot)
@@ -417,7 +447,13 @@ double GetSafeLot(string sym, double desiredLot)
    if(minLot <= 0) minLot = 0.01;
    
    double lot = desiredLot;
-   if(lot <= 0)
+   string s = sym;
+   StringToUpper(s);
+   if(StringFind(s, "CRASH 600") >= 0 || StringFind(s, "CRASH600") >= 0)
+   {
+      lot = 0.25;
+   }
+   else if(lot <= 0)
    {
       int cat = GetSymbolCategory(sym);
       if(cat == 2)
@@ -430,10 +466,7 @@ double GetSafeLot(string sym, double desiredLot)
       }
       else
       {
-         string s = sym;
-         StringToUpper(s);
-         if(StringFind(s, "CRASH 600") >= 0 || StringFind(s, "CRASH600") >= 0 ||
-            StringFind(s, "CRASH 900") >= 0 || StringFind(s, "CRASH900") >= 0 ||
+         if(StringFind(s, "CRASH 900") >= 0 || StringFind(s, "CRASH900") >= 0 ||
             StringFind(s, "BOOM 1000") >= 0 || StringFind(s, "BOOM1000") >= 0)
          {
             lot = 0.50;
@@ -515,24 +548,13 @@ void MarkAsExecuted(string cmdId)
 void WriteFeedback(string cmdId, string tradeId, string status, ulong ticket, string msg)
 {
    int hFile = FileOpen(feedbackFileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
-   string existing = "";
    if(hFile != INVALID_HANDLE)
    {
-      while(!FileIsEnding(hFile))
-      {
-         existing += FileReadString(hFile);
-      }
+      FileSeek(hFile, 0, SEEK_END);
+      long timeNow = (long)TimeCurrent();
+      string entry = "{\"cmdId\":\"" + cmdId + "\",\"tradeId\":\"" + tradeId + "\",\"status\":\"" + status + "\",\"ticket\":" + (string)ticket + ",\"msg\":\"" + msg + "\",\"time\":" + (string)timeNow + "}\n";
+      FileWriteString(hFile, entry);
       FileClose(hFile);
-   }
-   
-   long timeNow = (long)TimeCurrent();
-   string entry = "{\"cmdId\":\"" + cmdId + "\",\"tradeId\":\"" + tradeId + "\",\"status\":\"" + status + "\",\"ticket\":" + (string)ticket + ",\"msg\":\"" + msg + "\",\"time\":" + (string)timeNow + "}\n";
-   
-   int hWrite = FileOpen(feedbackFileName, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
-   if(hWrite != INVALID_HANDLE)
-   {
-      FileWriteString(hWrite, existing + entry);
-      FileClose(hWrite);
    }
 }
 
@@ -564,6 +586,84 @@ void ProcessSingleCommand(string cmdJson)
    // ── A. ACCION: APERTURA (OPEN) ──
    if(action == "OPEN")
    {
+      // Candado estricto de concurrencia por grupo (Crash/Boom: 3, XAUUSD: 1, Otros: 2)
+      int targetBucket = GetSymbolBucket(mt5Sym);
+      int inBucketCount = 0;
+      int totalBotCount = 0;
+      for(int p = 0; p < PositionsTotal(); p++)
+      {
+         if(PositionGetTicket(p) > 0)
+         {
+            if(PositionGetInteger(POSITION_MAGIC) == BridgeMagicNumber)
+            {
+               totalBotCount++;
+               string pSym = PositionGetString(POSITION_SYMBOL);
+               if(GetSymbolBucket(pSym) == targetBucket)
+               {
+                  inBucketCount++;
+               }
+            }
+         }
+      }
+
+      int bucketLimit = MaxOtherTrades;
+      string bucketName = "Otros indices y Forex";
+      if(targetBucket == 0)      { bucketLimit = MaxCrashBoomTrades; bucketName = "Crash/Boom"; }
+      else if(targetBucket == 1) { bucketLimit = MaxXauusdTrades;    bucketName = "XAUUSD"; }
+
+      // Candado Global Total: Maximo 6 trades simultaneos (3 Crash/Boom + 1 XAUUSD + 2 Otros)
+      int maxTotalTrades = MaxCrashBoomTrades + MaxXauusdTrades + MaxOtherTrades;
+      if(totalBotCount >= maxTotalTrades)
+      {
+         Print("⛔ [DerivApp Bridge] BLOQUEO CONCURRENCIA GLOBAL: Maximo total de ", maxTotalTrades, " trades simultaneos alcanzado en MT5 (actuales bot: ", totalBotCount, "). Orden ", mt5Sym, " descartada.");
+         WriteFeedback(cmdId, tradeId, "REJECTED_MAX_CONCURRENT", 0, "Max total concurrent trades reached: " + (string)totalBotCount);
+         MarkAsExecuted(cmdId);
+         return;
+      }
+
+      if(inBucketCount >= bucketLimit)
+      {
+         Print("⛔ [DerivApp Bridge] BLOQUEO CONCURRENCIA [", bucketName, "]: Maximo de ", bucketLimit, " trades alcanzado en MT5 para este grupo (actuales en grupo: ", inBucketCount, ", total bot: ", totalBotCount, "). Orden ", mt5Sym, " descartada.");
+         WriteFeedback(cmdId, tradeId, "REJECTED_MAX_CONCURRENT", 0, "Max concurrent trades reached for " + bucketName + ": " + (string)inBucketCount);
+         MarkAsExecuted(cmdId);
+         return;
+      }
+
+      // Candado Anti-Reentrada en Oro tras salida en Stop Loss (10 minutos)
+      if(targetBucket == 1)
+      {
+         if(GlobalVariableCheck("DAPP_GOLD_SL_TIME"))
+         {
+            datetime lastSl = (datetime)GlobalVariableGet("DAPP_GOLD_SL_TIME");
+            int elapsed = (int)(TimeCurrent() - lastSl);
+            if(elapsed >= 0 && elapsed < 600)
+            {
+               int rem = 600 - elapsed;
+               Print("⛔ [DerivApp Bridge] BLOQUEO SL ORO: XAUUSD salio en SL hace ", elapsed, "s. Esperando 10 minutos de enfriamiento (restan ", rem / 60, "m ", rem % 60, "s). Orden descartada.");
+               WriteFeedback(cmdId, tradeId, "REJECTED_GOLD_SL_COOLDOWN", 0, "Oro en cooldown de 10 min tras salida en Stop Loss");
+               MarkAsExecuted(cmdId);
+               return;
+            }
+         }
+      }
+
+      // Candado Anti-Reentrada en Oro tras salida en Stop Loss (10 minutos)
+      if(targetBucket == 1)
+      {
+         if(GlobalVariableCheck("DAPP_GOLD_SL_TIME"))
+         {
+            datetime lastSl = (datetime)GlobalVariableGet("DAPP_GOLD_SL_TIME");
+            int elapsed = (int)(TimeCurrent() - lastSl);
+            if(elapsed >= 0 && elapsed < 600)
+            {
+               int rem = 600 - elapsed;
+               Print("⛔ [DerivApp Bridge] BLOQUEO SL ORO: XAUUSD salio en SL hace ", elapsed, "s. Esperando 10 minutos de enfriamiento (restan ", rem / 60, "m ", rem % 60, "s). Orden descartada.");
+               WriteFeedback(cmdId, tradeId, "REJECTED_GOLD_SL_COOLDOWN", 0, "Oro en cooldown de 10 min tras salida en Stop Loss");
+               MarkAsExecuted(cmdId);
+               return;
+            }
+         }
+      }
       // Candado de seguridad estricto para sinteticos Deriv:
       if(StringFind(mt5Sym, "Boom") >= 0 && dir == "SELL")
       {
@@ -669,6 +769,7 @@ void ProcessSingleCommand(string cmdJson)
    {
       bool closed = false;
       ulong targetTicket = (ulong)ExtractJsonNumber(cmdJson, "ticket");
+       string reason = ExtractJsonString(cmdJson, "reason");
 
       // 1. Si viene ticket específico, verificar Magic Number antes de cerrar
       if(targetTicket > 0)
@@ -726,6 +827,11 @@ void ProcessSingleCommand(string cmdJson)
                }
             }
          }
+      }
+      if(closed && GetSymbolBucket(mt5Sym) == 1 && (StringFind(reason, "SL") >= 0 || StringFind(reason, "LOSS") >= 0))
+      {
+         GlobalVariableSet("DAPP_GOLD_SL_TIME", (double)TimeCurrent());
+         Print("⏳ [DerivApp Bridge] Cooldown de 10 minutos activado para XAUUSD tras salida en Stop Loss.");
       }
       MarkAsExecuted(cmdId);
    }
