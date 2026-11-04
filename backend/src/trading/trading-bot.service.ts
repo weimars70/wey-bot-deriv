@@ -1400,7 +1400,8 @@ export class TradingBotService implements OnModuleInit {
         }
 
         const cooldownKey = `${sig.symbol}_SPIKE_RADAR`;
-        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
+        // Cooldown de 15 minutos por símbolo para evitar sobreoperar en la misma zona
+        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 900_000) continue;
 
         const isHighlyViable = true;
         const opened = await this.openTrade({
@@ -1451,7 +1452,8 @@ export class TradingBotService implements OnModuleInit {
         }
 
         const cooldownKey = `${sig.symbol}_EA_WEY_SMC`;
-        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 300_000) continue;
+        // Cooldown de 15 minutos por símbolo para evitar sobreoperar en la misma zona
+        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 900_000) continue;
 
         const isHighlyViable = true;
         const opened = await this.openTrade({

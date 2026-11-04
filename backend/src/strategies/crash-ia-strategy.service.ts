@@ -297,19 +297,25 @@ export class CrashIaStrategyService {
       ? this.calculateEMA(m15Closes.slice(0, -3), 50)
       : ema50_M15;
 
-    const trendM15: 'BAJISTA' | 'ALCISTA' =
-      (!isBoom && currentPrice <= ema50_M15 && ema21_M15 <= ema50_M15 * 1.0003 && ema50_M15 <= ema50Prev_M15 * 1.0002)
-        ? 'BAJISTA'
-        : (isBoom && currentPrice >= ema50_M15 && ema21_M15 >= ema50_M15 * 0.9997 && ema50_M15 >= ema50Prev_M15 * 0.9998)
-        ? 'ALCISTA'
-        : currentPrice <= ema50_M15
-        ? 'BAJISTA'
-        : 'ALCISTA';
+    // REGLA USUARIO: "tratar de coger una tendencia" (Solo operar a favor de la tendencia institucional real)
+    const isEmaBajista = ema21_M15 <= ema50_M15 && currentPrice <= ema50_M15 * 1.001;
+    const isEmaAlcista = ema21_M15 >= ema50_M15 && currentPrice >= ema50_M15 * 0.999;
 
-    // En Crash: precio <= EMA50 o tendencia bajista M15; En Boom: precio >= EMA50 o tendencia alcista M15
+    const trendM15: 'BAJISTA' | 'ALCISTA' = (!isBoom && isEmaBajista)
+      ? 'BAJISTA'
+      : (isBoom && isEmaAlcista)
+      ? 'ALCISTA'
+      : (!isBoom && currentPrice < ema50_M15)
+      ? 'BAJISTA'
+      : (isBoom && currentPrice > ema50_M15)
+      ? 'ALCISTA'
+      : isBoom ? 'BAJISTA' : 'ALCISTA';
+
+    // En Crash: Solo ventas si la estructura y EMAs en M15 son estrictamente BAJISTAS
+    // En Boom: Solo compras si la estructura y EMAs en M15 son estrictamente ALCISTAS
     const trendOk = isBoom
-      ? currentPrice >= ema50_M15 * 0.998 || trendM15 === 'ALCISTA'
-      : currentPrice <= ema50_M15 * 1.002 || trendM15 === 'BAJISTA';
+      ? (trendM15 === 'ALCISTA' && isEmaAlcista)
+      : (trendM15 === 'BAJISTA' && isEmaBajista);
 
     // 8. Filtro 2: RSI 14 en M5 (evitar zonas sobreextendidas en contra del spike)
     // En Crash: 28.0 <= RSI <= 78.0 (con margen para el retroceso antes de la caída)
@@ -431,10 +437,19 @@ export class CrashIaStrategyService {
       m5Viability.reason = retestInfo.reason;
     }
 
+    // REGLA USUARIO: "no entrar en zonas que para todos son muy viables, esperar a que saque a todos"
+    // Cazada de liquidez (Liquidity Sweep):
+    // En Crash: entrar en zona profunda de descuento (mid50 o superior), NO en la base ni antes del OB
+    // En Boom: entrar en zona profunda de descuento (mid50 o inferior), NO en la base ni antes del OB
+    const isPostSweepOrDeepOB = activeOrderBlock && activeOrderBlock.inZone && (
+      !isBoom
+        ? currentPrice >= activeOrderBlock.mid50
+        : currentPrice <= activeOrderBlock.mid50
+    );
+
     const inEntryZone =
       status === 'EN_ZONA_50' ||
-      status === 'EN_BASE_CAJA' ||
-      (activeOrderBlock && (activeOrderBlock.inZone || activeOrderBlock.distToPrice <= m5CandleHeight * 2.0));
+      Boolean(isPostSweepOrDeepOB);
 
     const canSell = Boolean(!isBoom && inEntryZone && trendOk && rsiOk && greenOk && m5Viability.isViable);
     const canBuy = Boolean(isBoom && inEntryZone && trendOk && rsiOk && greenOk && m5Viability.isViable);
@@ -596,41 +611,43 @@ export class CrashIaStrategyService {
       const ob = ev.activeOrderBlock;
       if (!ob || (ob.status !== 'FRESCO' && ob.status !== 'EN_ZONA')) continue;
 
-      // 1. Proximidad a la zona del Order Block (dentro de la zona o detección anticipada de radar)
-      const proximity = ob.inZone || ob.distToPrice <= ev.m5CandleHeight * 3.5;
-      if (!proximity) continue;
+      // 1. REGLA USUARIO: No entrar en zonas retail antes de tiempo ("esperar a que el mercado saque a todos").
+      // El precio debe estar DENTRO del OB y en la mitad profunda de descuento/cazada (mid50 o superior en Crash, mid50 o inferior en Boom)
+      if (!ob.inZone) continue;
+      const inDeepDiscount = isBoom ? ev.currentPrice <= ob.mid50 : ev.currentPrice >= ob.mid50;
+      if (!inDeepDiscount) continue;
 
-      // 2. Velas de enfriamiento M1 (evitar entrar en la mecha inmediata del spike sin retroceso)
+      // 2. Velas de enfriamiento M1 (mínimo 3 velas para dar tiempo a la cazada y retroceso)
       const coolingOk = isBoom
-        ? ev.filters.consecutiveRedM1 >= 2
-        : ev.filters.consecutiveGreenM1 >= 2;
+        ? ev.filters.consecutiveRedM1 >= 3
+        : ev.filters.consecutiveGreenM1 >= 3;
       if (!coolingOk) continue;
 
-      // 3. Tendencia general compatible en M15
-      const trendOk = isBoom
-        ? (ev.filters.trendM15 === 'ALCISTA' || ev.currentPrice >= ev.filters.ema50_M15 * 0.998)
-        : (ev.filters.trendM15 === 'BAJISTA' || ev.currentPrice <= ev.filters.ema50_M15 * 1.002);
-      if (!trendOk) continue;
+      // 3. REGLA USUARIO: "tratar de coger una tendencia" (Tendencia M15 estricta, no operar contra-tendencia)
+      if (!ev.filters.trendOk) continue;
 
-      // 4. RSI saludable y con margen para el movimiento del spike (sin contradicciones)
+      // 4. RSI institucional saludable (sin extremos contra-tendencia)
       const rsi = ev.filters.rsi_M5;
       const rsiOk = isBoom
-        ? (rsi >= 22 && rsi <= 72)
-        : (rsi >= 28 && rsi <= 78);
+        ? (rsi >= 28 && rsi <= 65)
+        : (rsi >= 35 && rsi <= 72);
       if (!rsiOk) continue;
 
-      // 5. Vela Amiga H1
+      // 5. Vela Amiga H1 a favor
       if (!ev.filters.velaAmigaOk) continue;
 
-      // 6. Calcular score de confianza (65 a 100)
-      let score = 65;
-      if (ob.status === 'FRESCO') score += 10;
-      if (ob.inZone) score += 10;
-      if (ob.distToPrice <= ev.m5CandleHeight * 1.0) score += 5;
-      if (ev.vCandidate) score += 5;
+      // 6. Viabilidad M5 confirmada (rechazo o desaceleración en zona institucional)
+      if (!ev.m5Viability?.isViable) continue;
+
+      // 7. Cálculo riguroso de Score Institucional Sniper (máx 100)
+      let score = 50;
+      if (ev.filters.trendOk) score += 15;
+      if (ev.filters.velaAmigaOk) score += 10;
+      if (inDeepDiscount) score += 10;
       if (ev.m5Viability?.isViable) score += 5;
-      if (isBoom && rsi >= 35 && rsi <= 60) score += 5;
-      if (!isBoom && rsi >= 40 && rsi <= 65) score += 5;
+      if (ev.vCandidate) score += 5;
+      if (isBoom && rsi >= 35 && rsi <= 55) score += 5;
+      if (!isBoom && rsi >= 45 && rsi <= 65) score += 5;
 
       const entryPrice = ob.mid50 || ev.entryLevel50;
       const stopLossPrice = isBoom
@@ -1301,20 +1318,20 @@ export class CrashIaStrategyService {
     if (!touchedZone) return false;
 
     if (!isBoom) {
-      // En Crash (SELL): no haber cerrado por encima de zoneHigh y mostrar mecha superior o desaceleración del cuerpo verde
-      if (cClose > zoneHigh) return false;
+      // En Crash (SELL): Mecha superior de rechazo tras el barrido / sweep de liquidez
+      if (cClose > zoneHigh + 1.0) return false;
       const upperWick = cHigh - Math.max(cOpen, cClose);
       const prevUpperWick = Number(prev.high) - Math.max(pOpen, pClose);
-      const hasWickRejection = upperWick >= cBody * 0.2 || prevUpperWick >= pBody * 0.25;
-      const hasDeceleration = cBody <= pBody * 1.15 || cClose <= cOpen;
+      const hasWickRejection = upperWick >= cBody * 0.35 || prevUpperWick >= pBody * 0.35 || upperWick >= 2.0;
+      const hasDeceleration = (cBody <= pBody * 0.70) || (cClose <= cOpen);
       return hasWickRejection || hasDeceleration;
     } else {
-      // En Boom (BUY): no haber cerrado por debajo de zoneLow y mostrar mecha inferior o desaceleración del cuerpo rojo
-      if (cClose < zoneLow) return false;
+      // En Boom (BUY): Mecha inferior de rechazo tras el barrido / sweep de liquidez
+      if (cClose < zoneLow - 1.0) return false;
       const lowerWick = Math.min(cOpen, cClose) - cLow;
       const prevLowerWick = Math.min(pOpen, pClose) - Number(prev.low);
-      const hasWickRejection = lowerWick >= cBody * 0.2 || prevLowerWick >= pBody * 0.25;
-      const hasDeceleration = cBody <= pBody * 1.15 || cClose >= cOpen;
+      const hasWickRejection = lowerWick >= cBody * 0.35 || prevLowerWick >= pBody * 0.35 || lowerWick >= 2.0;
+      const hasDeceleration = (cBody <= pBody * 0.70) || (cClose >= cOpen);
       return hasWickRejection || hasDeceleration;
     }
   }
