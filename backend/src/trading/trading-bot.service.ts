@@ -90,6 +90,10 @@ export class TradingBotService implements OnModuleInit {
   // Guarda el timestamp cuando un trade con spike alcanza el tope de la zona de retesteo
   private tradeRetestTopeReachedAt = new Map<string, number>();
 
+  // ── REGLA USUARIO: Salida si el retroceso cubre el Spike (3 minutos sin nuevo spike) ──
+  // Guarda el timestamp cuando un trade que tuvo spike ve su ganancia cubierta por el retroceso (PnL <= 0)
+  private tradeSpikeCoveredAt = new Map<string, number>();
+
   // Puente directo con MetaTrader 5 (detecta automáticamente si existe la ruta local de Weimar o la de .env)
   private readonly mt5FilesDir = (() => {
     const envDir = process.env.MT5_FILES_DIR;
@@ -627,6 +631,13 @@ export class TradingBotService implements OnModuleInit {
                 );
                 this.tradeRetestTopeReachedAt.delete(trade.id);
               }
+              // Si estaba esperando por spike cubierto, un nuevo spike resetea el temporizador de 3 minutos
+              if (this.tradeSpikeCoveredAt.has(trade.id)) {
+                this.logger.log(
+                  `⚡ [NUEVO SPIKE TRAS RETROCESO] ${sym} (${trade.id}): Ocurrió un nuevo spike en la posición. Reseteando temporizador de 3 minutos por spike cubierto.`,
+                );
+                this.tradeSpikeCoveredAt.delete(trade.id);
+              }
               if (now - prevTradeSpike > 15_000) {
                 trade.spikeCount = (trade.spikeCount || 0) + 1;
                 this.logger.log(
@@ -905,6 +916,42 @@ export class TradingBotService implements OnModuleInit {
             // Si el precio ya no está en el tope de la zona de retesteo, resetear temporizador
             if (this.tradeRetestTopeReachedAt.has(trade.id)) {
               this.tradeRetestTopeReachedAt.delete(trade.id);
+            }
+          }
+        }
+
+        // ── REGLA USUARIO: SI TUVO SPIKE Y EL RETROCESO LO CUBRE, ESPERAR 3 MINUTOS SIN NUEVO SPIKE Y SALIR (NO ESPERAR AL 60%) ──
+        if (trade.hadSpike) {
+          const lastSpikeTime = this.tradeLastSpikeTime.get(trade.id) || entryMs;
+          // El retroceso cubre el spike cuando devuelve la ganancia (PnL <= 0 o pnlPoints <= 0)
+          const isSpikeCovered = currentPnlUsd <= 0 || trade.pnlPoints <= 0;
+
+          if (isSpikeCovered) {
+            if (!this.tradeSpikeCoveredAt.has(trade.id)) {
+              this.tradeSpikeCoveredAt.set(trade.id, nowMs);
+              this.logger.log(
+                `⚠️ [SPIKE CUBIERTO POR RETROCESO] ${trade.symbol} (${trade.direction} - ${trade.strategy}): El retroceso cubrió la ganancia del spike (PnL actual: $${currentPnlUsd.toFixed(2)} USD). Esperando 3 minutos (180s): si no hay nuevo spike se cerrará inmediatamente sin esperar al 60%.`,
+              );
+            }
+
+            const coveredAt = this.tradeSpikeCoveredAt.get(trade.id)!;
+            const timeCoveredMs = nowMs - coveredAt;
+            const timeSinceLastSpikeMs = nowMs - lastSpikeTime;
+            const THREE_MIN_MS = 3 * 60 * 1000; // 3 minutos = 180 segundos
+
+            // Si transcurrieron 3 minutos desde que se cubrió el spike y en esos 3 minutos no hubo nuevo spike:
+            if (timeCoveredMs >= THREE_MIN_MS && timeSinceLastSpikeMs >= THREE_MIN_MS) {
+              this.logger.log(
+                `⏱️ [SALIDA 3 MIN TRAS SPIKE CUBIERTO] ${trade.symbol} (${trade.direction} - ${trade.strategy}): Pasaron 3 minutos desde que el retroceso cubrió el spike sin nuevo spike. Cerrando trade inmediatamente ($${currentPnlUsd.toFixed(2)} USD).`,
+              );
+              this.tradeSpikeCoveredAt.delete(trade.id);
+              await this.closeTrade(trade.id, 'SPIKE_COVERED_NO_NEW_SPIKE_3MIN', currentPrice);
+              continue;
+            }
+          } else {
+            // Si el precio aún está en profit (el spike no ha sido cubierto), limpiar temporizador
+            if (this.tradeSpikeCoveredAt.has(trade.id)) {
+              this.tradeSpikeCoveredAt.delete(trade.id);
             }
           }
         }
@@ -2336,6 +2383,7 @@ export class TradingBotService implements OnModuleInit {
 
     this.tradeLastSpikeTime.delete(id);
     this.tradeRetestTopeReachedAt.delete(id);
+    this.tradeSpikeCoveredAt.delete(id);
 
     trade.status = 'CLOSED';
     trade.exitTime = Math.floor(Date.now() / 1000);

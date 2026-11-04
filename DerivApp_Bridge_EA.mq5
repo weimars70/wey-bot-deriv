@@ -140,15 +140,55 @@ void ManageNoSpikeTimeout()
       bool isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
       double curProfit = PositionGetDouble(POSITION_PROFIT);
       string spikeGV = "DAPP_SPIKE_" + (string)ticket;
+      string covGV   = "DAPP_COV_" + (string)ticket;
 
-      if(!GlobalVariableCheck(spikeGV) && (HasFavorableM1SpikeSince(sym, entryTime, isBuy) || curProfit >= 0.50))
+      bool hadSpike = GlobalVariableCheck(spikeGV);
+      if(!hadSpike && (HasFavorableM1SpikeSince(sym, entryTime, isBuy) || curProfit >= 0.50))
       {
+         hadSpike = true;
          GlobalVariableSet(spikeGV, 1.0);
-         Print("[DerivApp Bridge] Spike/Profit detected for Crash/Boom ticket #", ticket,
-               ". Enabling 60% trailing stop protection.");
+         Print("[DerivApp Bridge] Spike/Profit detectado para Crash/Boom ticket #", ticket, " (", sym, ").");
       }
 
-      if(curProfit > 0.0) continue;
+      // Si el trade está en ganancia positiva, limpiar contador de spike cubierto
+      if(curProfit > 0.0)
+      {
+         if(GlobalVariableCheck(covGV)) GlobalVariableDel(covGV);
+         continue;
+      }
+
+      // ── REGLA USUARIO: Si tuvo spike y en el retroceso cubre el spike (curProfit <= 0),
+      // esperar 3 minutos (180s). Si no hay nuevo spike, salir inmediatamente (sin esperar al 60%).
+      if(hadSpike)
+      {
+         datetime covTime = 0;
+         if(!GlobalVariableCheck(covGV))
+         {
+            covTime = TimeCurrent();
+            GlobalVariableSet(covGV, (double)covTime);
+            Print("⚠️ [DerivApp Bridge] Ticket #", ticket, " (", sym, ") tuvo spike y el retroceso lo cubrió (Profit: $", DoubleToString(curProfit, 2), "). Esperando 3 min (180s) por nuevo spike antes de salir.");
+         }
+         else
+         {
+            covTime = (datetime)GlobalVariableGet(covGV);
+         }
+
+         int secSinceCovered = (int)(TimeCurrent() - covTime);
+         if(secSinceCovered >= 180) // 3 minutos
+         {
+            Print("⏱️ [DerivApp Bridge] Cerrando ticket #", ticket, " tras 3 minutos con spike cubierto sin nuevo spike.");
+            if(trade.PositionClose(ticket))
+            {
+               WriteFeedback("timeout_3min_spike_covered", "", "CLOSED", ticket, "Closed after 3 min spike covered without new spike");
+               GlobalVariableDel("DAPP_MAXP_" + (string)ticket);
+               GlobalVariableDel(spikeGV);
+               GlobalVariableDel(covGV);
+               GlobalVariableSet("DAPP_SL_" + sym, (double)TimeCurrent());
+            }
+            continue;
+         }
+         continue; // Mientras está en los 3 minutos de gracia por spike cubierto, no cae al SL regular
+      }
 
       int elapsedSec = (int)(TimeCurrent() - entryTime);
       int barsSinceEntry = iBarShift(sym, PERIOD_M1, entryTime, false);
@@ -803,6 +843,7 @@ void ProcessSingleCommand(string cmdJson)
                   Print("🏁 [DerivApp Bridge] Posicion cerrada por ticket en MT5. Ticket: ", targetTicket, " Motivo: ", reason);
                   GlobalVariableDel("DAPP_MAXP_" + (string)targetTicket);
                   GlobalVariableDel("DAPP_SPIKE_" + (string)targetTicket);
+                  GlobalVariableDel("DAPP_COV_" + (string)targetTicket);
                   WriteFeedback(cmdId, tradeId, "CLOSED", targetTicket, "Closed OK: " + reason);
                }
                else
