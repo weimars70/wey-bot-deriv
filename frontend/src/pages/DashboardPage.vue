@@ -1061,8 +1061,15 @@ function archiveIncomingSpikeRadar(signals) {
   let history = loadStoredRadarHistory();
 
   for (const sig of signals) {
+    // REGLA USUARIO: Menos señales y de alta calidad (filtrar solo las de score >= 80%)
+    if (Number(sig.score) < 80) continue;
+
+    // Deduplicación inteligente por símbolo en ventana de 30 minutos (evitar saturación de 136 señales)
+    const existingIdx = history.findIndex(
+      (h) => h.symbol === sig.symbol && h.operationType === sig.operationType && (now - Number(h.savedAt || 0) < 30 * 60 * 1000)
+    );
+
     const signature = `${sig.symbol}_${sig.operationType}_${sig.entryLevel50}`;
-    const existingIdx = history.findIndex((h) => h.signature === signature);
 
     if (existingIdx >= 0) {
       history[existingIdx] = {

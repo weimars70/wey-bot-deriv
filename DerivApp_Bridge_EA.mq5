@@ -143,7 +143,7 @@ void ManageNoSpikeTimeout()
       string covGV   = "DAPP_COV_" + (string)ticket;
 
       bool hadSpike = GlobalVariableCheck(spikeGV);
-      if(!hadSpike && (HasFavorableM1SpikeSince(sym, entryTime, isBuy) || curProfit >= 0.50))
+      if(!hadSpike && (HasFavorableM1SpikeSince(sym, entryTime, isBuy) || curProfit >= 3.00))
       {
          hadSpike = true;
          GlobalVariableSet(spikeGV, 1.0);
@@ -183,6 +183,7 @@ void ManageNoSpikeTimeout()
                GlobalVariableDel("DAPP_MAXP_" + (string)ticket);
                GlobalVariableDel(spikeGV);
                GlobalVariableDel(covGV);
+               GlobalVariableDel("DAPP_TSL_" + (string)ticket);
                GlobalVariableSet("DAPP_SL_" + sym, (double)TimeCurrent());
             }
             continue;
@@ -190,22 +191,49 @@ void ManageNoSpikeTimeout()
          continue; // Mientras está en los 3 minutos de gracia por spike cubierto, no cae al SL regular
       }
 
-      int elapsedSec = (int)(TimeCurrent() - entryTime);
-      int barsSinceEntry = iBarShift(sym, PERIOD_M1, entryTime, false);
-      string upSym = sym;
-      StringToUpper(upSym);
-      bool isCrash300 = (StringFind(upSym, "CRASH 300") >= 0 || StringFind(upSym, "CRASH300") >= 0);
-      int maxBars = isCrash300 ? 19 : 8;
-      int maxSec = isCrash300 ? (19 * 60) : 480;
-      if(barsSinceEntry >= maxBars || elapsedSec >= maxSec)
+      // ── ELIMINADO EL CIERRE PREMATURO A LOS 8 MINUTOS ──
+      // Para respetar la instrucción del usuario y el Stop Loss total (técnico y monetario -5 USD),
+      // la posición no se cierra prematuramente a los 8 minutos con pérdidas pequeñas.
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Control de Stop Loss Técnico Virtual (Order Block SL)             |
+//+------------------------------------------------------------------+
+void CheckTechnicalStopLoss()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket <= 0) continue;
+      
+      ulong posMagic = PositionGetInteger(POSITION_MAGIC);
+      if(posMagic != BridgeMagicNumber && !ProtectAllPositions) continue;
+      
+      string tslGV = "DAPP_TSL_" + (string)ticket;
+      if(!GlobalVariableCheck(tslGV)) continue;
+      
+      double slPrice = GlobalVariableGet(tslGV);
+      if(slPrice <= 0.0) continue;
+      
+      string sym = PositionGetString(POSITION_SYMBOL);
+      bool isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      double curPrice = isBuy ? SymbolInfoDouble(sym, SYMBOL_BID) : SymbolInfoDouble(sym, SYMBOL_ASK);
+      if(curPrice <= 0.0) continue;
+      
+      bool slHit = isBuy ? (curPrice <= slPrice) : (curPrice >= slPrice);
+      if(slHit)
       {
-         Print("[DerivApp Bridge] Closing Crash/Boom ticket #", ticket, " after ", maxBars, " minutes without profit.");
+         Print("🛑 [DerivApp Bridge] SL TÉCNICO alcanzado en ", sym, " (Ticket #", ticket, "): Precio actual ", DoubleToString(curPrice, 3), " cruzó SL de Order Block ", DoubleToString(slPrice, 3), ". Cerrando operación.");
          if(trade.PositionClose(ticket))
          {
-            WriteFeedback("timeout_" + (string)maxBars + "min_crash_boom", "", "CLOSED", ticket, "Closed after " + (string)maxBars + " minutes max SL on Crash/Boom");
+            WriteFeedback("sl_technical", "", "CLOSED", ticket, "Closed by Technical Order Block Stop Loss");
+            GlobalVariableDel(tslGV);
             GlobalVariableDel("DAPP_MAXP_" + (string)ticket);
+            GlobalVariableDel("DAPP_SPIKE_" + (string)ticket);
+            GlobalVariableDel("DAPP_COV_" + (string)ticket);
             GlobalVariableSet("DAPP_SL_" + sym, (double)TimeCurrent());
-            Print("⏳ [DerivApp Bridge] Cooldown de 30 minutos activado para ", sym, " tras salida en Stop Loss por tiempo.");
+            Print("⏳ [DerivApp Bridge] Cooldown de 30 minutos activado para ", sym, " tras salida en Stop Loss técnico.");
          }
       }
    }
@@ -287,14 +315,23 @@ void ProtectProfitTarget()
       
       bool shouldCheckTrailing = false;
       double ratio = 0.60;
-      
       if(cat == 0)
       {
-         // Crash y Boom: asegurar al 60% solo si el profit superó los 8 USD
-         if(maxProf > 8.00)
+         // Crash y Boom: Trailing Stop Inteligente Escalonado (NUNCA dejar devolver ganancias grandes)
+         if(maxProf >= 30.00)
          {
             shouldCheckTrailing = true;
-            ratio = 0.25; // 25% piso para tolerar retrocesos normales de velas M1
+            ratio = 0.70; // Asegura el 70% del pico (ej: en $30 asegura $21; en $70 asegura $49 USD)
+         }
+         else if(maxProf >= 15.00)
+         {
+            shouldCheckTrailing = true;
+            ratio = 0.60; // Asegura el 60% del pico (ej: en $15 asegura $9; en $20 asegura $12 USD)
+         }
+         else if(maxProf >= 8.00)
+         {
+            shouldCheckTrailing = true;
+            ratio = 0.50; // Asegura el 50% del pico (ej: en $8 asegura $4; en $10 asegura $5 USD)
          }
       }
       else if(cat == 1)
@@ -319,7 +356,7 @@ void ProtectProfitTarget()
       if(shouldCheckTrailing)
       {
          double floorProfit = NormalizeDouble(maxProf * ratio, 2);
-         if(cat == 0 && floorProfit < 2.00) floorProfit = 2.00; // Minimo  USD asegurados en Crash/Boom
+         if(cat == 0 && floorProfit < 4.00) floorProfit = 4.00; // Minimo  USD asegurados en Crash/Boom
          if(profit <= floorProfit)
          {
             Print("🛡️ [DerivApp Bridge] ¡TRAILING STOP ", DoubleToString(ratio * 100.0, 0), "% ACTIVADO! ", posSym,
@@ -351,7 +388,7 @@ void CleanupOrphanedGlobalVariables()
    for(int g = totalGVs - 1; g >= 0; g--)
    {
       string gvName = GlobalVariableName(g);
-       if(StringFind(gvName, "DAPP_MAXP_") == 0 || StringFind(gvName, "DAPP_SPIKE_") == 0)
+       if(StringFind(gvName, "DAPP_MAXP_") == 0 || StringFind(gvName, "DAPP_SPIKE_") == 0 || StringFind(gvName, "DAPP_TSL_") == 0 || StringFind(gvName, "DAPP_COV_") == 0)
        {
           int prefixLen = StringFind(gvName, "DAPP_MAXP_") == 0 ? 10 : 11;
           string ticketStr = StringSubstr(gvName, prefixLen);
@@ -370,6 +407,7 @@ void CleanupOrphanedGlobalVariables()
 void OnTick()
 {
    ManageNoSpikeTimeout();
+   CheckTechnicalStopLoss();
    // Evaluar protección 70% de inmediato en cada tick entrante
    ProtectProfitTarget();
 }
@@ -811,8 +849,14 @@ void ProcessSingleCommand(string cmdJson)
       
       if(success)
       {
-         Print("✅ [DerivApp Bridge] Orden MT5 EJECUTADA: ", mt5Sym, " (", dir, ") Lote: ", safeLot, " Ticket: ", orderTicket, " / ", dealTicket);
-         WriteFeedback(cmdId, tradeId, "EXECUTED", orderTicket > 0 ? orderTicket : dealTicket, retDesc);
+         ulong finalTicket = orderTicket > 0 ? orderTicket : dealTicket;
+         double rawSl = ExtractJsonNumber(cmdJson, "stopLossPrice");
+         if(rawSl > 0.0 && finalTicket > 0)
+         {
+            GlobalVariableSet("DAPP_TSL_" + (string)finalTicket, rawSl);
+         }
+         Print("✅ [DerivApp Bridge] Orden MT5 EJECUTADA: ", mt5Sym, " (", dir, ") Lote: ", safeLot, " Ticket: ", finalTicket, (rawSl > 0.0 ? " [SL Técnico: " + DoubleToString(rawSl, 3) + "]" : ""));
+         WriteFeedback(cmdId, tradeId, "EXECUTED", finalTicket, retDesc);
          MarkAsExecuted(cmdId);
       }
       else
@@ -1188,6 +1232,9 @@ void OnTimer()
 
    // 2. Proteger siempre el 70% del profit maximo alcanzado
    ProtectProfitTarget();
+
+   // 2a. Control de Stop Loss técnico virtual (Order Block)
+   CheckTechnicalStopLoss();
 
    // 2b. Control estricto de Stop Loss monetario (-5 USD general / -8 USD Crash 600)
    CheckMonetaryStopLoss();

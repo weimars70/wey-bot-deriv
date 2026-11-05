@@ -649,6 +649,10 @@ export class CrashIaStrategyService {
       if (isBoom && rsi >= 35 && rsi <= 55) score += 5;
       if (!isBoom && rsi >= 45 && rsi <= 65) score += 5;
 
+      // 8. FILTRO ULTRA-SNIPER ESTRICTO: Solo emitir señales de alta convicción (score >= 80)
+      // "menos señales y tratar de coger una tendencia"
+      if (score < 80) continue;
+
       const entryPrice = ob.mid50 || ev.entryLevel50;
       const stopLossPrice = isBoom
         ? Math.min(ob.low - ev.m5CandleHeight * 0.4, ev.currentPrice - ev.m5CandleHeight * 0.4)
@@ -1170,15 +1174,17 @@ export class CrashIaStrategyService {
         activeOB.high,
       );
 
-      const isViable = inOptimalEntryBand && (rejectionOrDeceleration || activeOB.inZone || activeOB.distToPrice <= m5CandleHeight * 1.5);
+      // REGLA USUARIO: No entrar en zonas retail evidentes ("esperar a que el mercado saque a todos").
+      // Se exige que el precio haya penetrado la zona del OB y muestre mecha de rechazo o desaceleración (cazada de liquidez completada).
+      const isViable = inOptimalEntryBand && rejectionOrDeceleration;
 
       let reason = '';
       if (!inOptimalEntryBand) {
         reason = `Esperar llegada al Order Block Fresco (${activeOB.mid50}; rango ${activeOB.low} - ${activeOB.high})`;
-      } else if (!rejectionOrDeceleration && !activeOB.inZone && activeOB.distToPrice > m5CandleHeight * 0.8) {
-        reason = `En zona OB (${activeOB.mid50}), esperando mecha de rechazo o desaceleración M5 antes de entrar`;
+      } else if (!rejectionOrDeceleration) {
+        reason = `En zona OB (${activeOB.mid50}): Esperando barrido de liquidez y mecha de rechazo M5 tras sacar a los que entraron antes`;
       } else {
-        reason = `Confluencia Sniper M5: Toque en Order Block Fresco (${activeOB.mid50}) + Zona de Reacción`;
+        reason = `Confluencia Sniper M5: Cazada de liquidez completada en Order Block Fresco (${activeOB.mid50}) + Rechazo M5`;
       }
 
       return {
