@@ -812,6 +812,18 @@
             />
             <q-btn
               unelevated
+              color="purple-7"
+              icon="biotech"
+              label="Backtest 30 Días (10 Índices) + Optimizar"
+              no-caps
+              class="text-weight-bold"
+              :loading="agentBacktesting"
+              @click="triggerAgentBacktestOptimize"
+            >
+              <q-tooltip>Simula el último mes (30 días) índice por índice en los 10 Crash/Boom, calibra filtros y guarda el reporte en bitácora</q-tooltip>
+            </q-btn>
+            <q-btn
+              unelevated
               color="emerald-7"
               icon="bolt"
               label="Ejecutar Diagnóstico IA Ahora"
@@ -1522,6 +1534,7 @@ const agentLogs = ref([]);
 const agentScheduleInfo = ref({});
 const agentLoading = ref(false);
 const agentEvaluating = ref(false);
+const agentBacktesting = ref(false);
 
 // ── Estado del Simulador Backtest ──
 const backtestLoading = ref(false);
@@ -1792,6 +1805,28 @@ async function triggerAgentEvaluationNow() {
     });
   } finally {
     agentEvaluating.value = false;
+  }
+}
+
+async function triggerAgentBacktestOptimize() {
+  agentBacktesting.value = true;
+  try {
+    const res = await tradingService.runAgentBacktestOptimize();
+    if (res && res.ok) {
+      agentLogs.value = res.logs || [];
+      agentScheduleInfo.value = res.scheduleInfo || agentScheduleInfo.value;
+      $q.notify({
+        type: 'positive',
+        message: 'Backtest de 30 días (10 índices) completado y optimización registrada en bitácora.',
+      });
+    }
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: 'Error al ejecutar el Backtest de 30 días del Agente IA.',
+    });
+  } finally {
+    agentBacktesting.value = false;
   }
 }
 

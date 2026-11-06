@@ -414,6 +414,27 @@ export class TradingBotService implements OnModuleInit {
     return this.getAssetCategory(symbol) === 'CRASH_BOOM';
   }
 
+  /**
+   * Umbral mínimo de Score IA por símbolo calibrado con Backtesting de 30 días:
+   * - CRASH300N, BOOM300N y CRASH500 exigen confluencia Ultra-Sniper >= 92% (7/7 en EA_WEY_SMC) y 30 min de enfriamiento.
+   * - Los demás 7 índices rentables en backtest mensual operan desde >= 85%.
+   */
+  private getMinScoreForSymbol(symbol: string): number {
+    const up = (symbol || '').toUpperCase();
+    if (up.includes('CRASH300') || up.includes('BOOM300') || up.includes('CRASH500')) {
+      return 92;
+    }
+    return 85;
+  }
+
+  private getCooldownMsForSymbol(symbol: string): number {
+    const up = (symbol || '').toUpperCase();
+    if (up.includes('CRASH300') || up.includes('BOOM300') || up.includes('CRASH500')) {
+      return 1_800_000; // 30 minutos para índices de alta selectividad
+    }
+    return 900_000; // 15 minutos estándar
+  }
+
   getConfig() {
     return {
       h1AutoEnabled: this.h1AutoEnabled,
@@ -1427,16 +1448,17 @@ export class TradingBotService implements OnModuleInit {
         const direction: 'BUY' | 'SELL' | null = sig.canBuy ? 'BUY' : sig.canSell ? 'SELL' : null;
         if (!direction || !sig.symbol || !sig.currentPrice) continue;
 
-        // ── REGLA USUARIO: Solo entradas del 85% o más de probabilidad/score ──
+        // ── REGLA CALIBRADA BACKTEST 30 DÍAS: Score mínimo por índice (85% estándar / 92% en 300N y CRASH500) ──
         const score = Number(sig.score) || 0;
-        if (score < 85) {
-          this.logger.debug(`[SPIKE_RADAR 85%] ${sig.symbol} omitido: score ${score}% es menor al 85% requerido.`);
+        const minReqScore = this.getMinScoreForSymbol(sig.symbol);
+        if (score < minReqScore) {
+          this.logger.debug(`[SPIKE_RADAR ${minReqScore}%] ${sig.symbol} omitido: score ${score}% es menor al ${minReqScore}% requerido.`);
           continue;
         }
 
         const cooldownKey = `${sig.symbol}_SPIKE_RADAR`;
-        // Cooldown de 15 minutos por símbolo para evitar sobreoperar en la misma zona
-        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 900_000) continue;
+        const cooldownMs = this.getCooldownMsForSymbol(sig.symbol);
+        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < cooldownMs) continue;
 
         const isHighlyViable = true;
         const opened = await this.openTrade({
@@ -1468,10 +1490,11 @@ export class TradingBotService implements OnModuleInit {
         if (this.activeTradesMap.size >= this.maxOpenTrades) break;
         if (!sig.symbol || !sig.direction || !sig.currentPrice) continue;
 
-        // ── REGLA USUARIO: Solo entradas del 85% o más (6/7 = 86%, 7/7 = 100%) ──
+        // ── REGLA CALIBRADA BACKTEST 30 DÍAS: Score mínimo por índice (85% estándar / 92% = 7/7 en 300N y CRASH500) ──
         const scorePct = Math.round(((sig.score || 0) / 7) * 100);
-        if (scorePct < 85) {
-          this.logger.debug(`[EA_WEY_SMC 85%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/7) es menor al 85% requerido.`);
+        const minReqScore = this.getMinScoreForSymbol(sig.symbol);
+        if (scorePct < minReqScore) {
+          this.logger.debug(`[EA_WEY_SMC ${minReqScore}%] ${sig.symbol} omitido: score ${scorePct}% (${sig.score}/7) es menor al ${minReqScore}% requerido.`);
           continue;
         }
 
@@ -1487,8 +1510,8 @@ export class TradingBotService implements OnModuleInit {
         }
 
         const cooldownKey = `${sig.symbol}_EA_WEY_SMC`;
-        // Cooldown de 15 minutos por símbolo para evitar sobreoperar en la misma zona
-        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < 900_000) continue;
+        const cooldownMs = this.getCooldownMsForSymbol(sig.symbol);
+        if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < cooldownMs) continue;
 
         const isHighlyViable = true;
         const opened = await this.openTrade({
@@ -1733,7 +1756,8 @@ export class TradingBotService implements OnModuleInit {
           }
 
           const evalScore = Number(evalData.score) || 0;
-          if (inReactionZone && evalData.canSell && m5IsViable && evalScore >= 85) {
+          const minReqScore = this.getMinScoreForSymbol(sym);
+          if (inReactionZone && evalData.canSell && m5IsViable && evalScore >= minReqScore) {
             // El SL debe quedar fuera de la zona de reacción, por encima del área entre la
             // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar además
             // el buffer mínimo de la escala del índice.
@@ -1791,7 +1815,8 @@ export class TradingBotService implements OnModuleInit {
           }
 
           const evalScore = Number(evalData.score) || 0;
-          if (inReactionZone && evalData.canBuy && m5IsViable && evalScore >= 85) {
+          const minReqScore = this.getMinScoreForSymbol(sym);
+          if (inReactionZone && evalData.canBuy && m5IsViable && evalScore >= minReqScore) {
             // El SL debe quedar fuera de la zona de reacción, por debajo del área entre la
             // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar
             // además el buffer mínimo de la escala del índice.

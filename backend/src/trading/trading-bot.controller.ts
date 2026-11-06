@@ -119,6 +119,17 @@ export class TradingBotController {
     return this.statsService.runAgentEvaluationNow();
   }
 
+  @Post('agent-backtest-optimize')
+  async runAgentBacktestOptimize() {
+    const btResult = await this.backtestService.runBacktest({
+      symbol: 'ALL',
+      days: 30,
+      minStars: 3,
+      onlyViable: true,
+    });
+    return this.statsService.recordMonthlyBacktestOptimization(btResult);
+  }
+
   @Post('reset-counts')
   resetCounts(@Body('symbol') symbol?: string) {
     return this.tradingService.resetSymbolTradesCount(symbol);

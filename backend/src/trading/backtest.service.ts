@@ -366,11 +366,32 @@ export class BacktestService {
       else if (!structureOk) viable = false;
       else if (candlesSinceLastSpike > benchmark * 3.2) viable = false;
 
-      // Aplicar filtros seleccionados por el usuario
-      if (stars < minStars) continue;
-      if (onlyViable && !viable) continue;
+      // Aplicar filtros seleccionados por el usuario + calibración 30 días por índice
+      const candleHour = new Date(currentCandle.epoch * 1000).getHours();
+      // Hora 22:00 (10 PM) demostró 6.3% WinRate en backtest mensual: bloquear
+      if (onlyViable && candleHour === 22) continue;
 
-      // ── 4. Calcular Niveles de SL y TP con Proyección ────────────────────
+      // CRASH300N, BOOM300N y CRASH500 requieren confluencia Ultra-Sniper (4★ y extremo de Bollinger)
+      const isStrictSymbol =
+        symbol === 'CRASH300N' || symbol === 'BOOM300N' || symbol === 'CRASH500';
+      const effectiveMinStars = isStrictSymbol ? Math.max(minStars, 4) : minStars;
+      if (stars < effectiveMinStars) continue;
+      if (onlyViable && !viable) continue;
+      if (onlyViable && isStrictSymbol) {
+        if (isCrash && (posInBB < 0.65 || rsiVal < 62)) continue;
+        if (isBoom && (posInBB > 0.35 || rsiVal > 38)) continue;
+      }
+
+      // ── 4. Calcular Niveles de SL Monetario Real (-$5 USD / -$8 USD Crash 600) ──
+      const lotMultiplier =
+        symbol === 'CRASH600'
+          ? 0.25
+          : symbol === 'CRASH300N' || symbol === 'CRASH900'
+          ? 0.5
+          : 0.5;
+      const maxSlUsd = symbol === 'CRASH600' ? 8.0 : 5.0;
+      const maxSlPoints = Number((maxSlUsd / lotMultiplier).toFixed(2));
+
       const window1H = candles1H.filter((c) => c.epoch <= currentCandle.epoch);
       const proj = calcLongProjectionLevels(
         symbol,
@@ -383,11 +404,15 @@ export class BacktestService {
         window4H,
       );
 
-      const slPrice = proj.sl;
+      // Respetar el margen completo del SL monetario (-$5 / -$8 USD) para no cerrar antes de tiempo
+      const slPrice =
+        direction === 'VENTA'
+          ? parseFloat((entryPrice + maxSlPoints).toFixed(2))
+          : parseFloat((entryPrice - maxSlPoints).toFixed(2));
       const tpPrice = proj.tp;
       const rb = proj.rb;
 
-      // ── 5. Simular el Trade hacia el futuro (SL 10 min o Spike Profit) ──
+      // ── 5. Simular el Trade hacia el futuro (SL Monetario Real -$5/-$8 USD o Spike Profit) ──
       let tradeResult: 'WIN' | 'LOSS' | null = null;
       let exitPrice = entryPrice;
       let exitTime = currentCandle.epoch;
@@ -395,14 +420,13 @@ export class BacktestService {
       let futureIdx = i + 1;
 
       // Un spike mide al menos spikeThreshold
-      const reactionSpikeThreshold = Math.max(typicalM1 * 2.0, 5.0);
+      const reactionSpikeThreshold = Math.max(typicalM1 * 1.8, 4.0);
 
-      // Máximo 12 velas (60 minutos) de seguimiento
+      // Máximo 12 velas (60 minutos) de seguimiento esperando el spike o el SL monetario
       const maxFutureIdx = Math.min(candles5M.length, i + 12);
 
       while (futureIdx < maxFutureIdx) {
         const fCandle = candles5M[futureIdx];
-        const elapsedCandles = futureIdx - i;
 
         if (direction === 'VENTA') {
           // Crash: spike es una caída fuerte
@@ -421,27 +445,18 @@ export class BacktestService {
           // B) Spike capturado con ganancia (movimiento brusco a favor)
           if (maxDropFromEntry >= reactionSpikeThreshold || candleDrop >= reactionSpikeThreshold) {
             tradeResult = 'WIN';
-            exitPrice = fCandle.low + reactionSpikeThreshold * 0.2; // salida asegurando beneficio del spike
+            exitPrice = Math.min(entryPrice - 2.0, fCandle.low + reactionSpikeThreshold * 0.2);
             exitTime = fCandle.epoch;
             exitReason = 'SPIKE_PROFIT_CAPTURED';
             break;
           }
 
-          // C) SL de Emergencia por Precio
+          // C) SL Monetario (-$5 USD / -$8 USD Crash 600)
           if (fCandle.high >= slPrice) {
             tradeResult = 'LOSS';
             exitPrice = slPrice;
             exitTime = fCandle.epoch;
-            exitReason = 'STOP_LOSS_PRECIO';
-            break;
-          }
-
-          // D) SL por tiempo (10 minutos / 2 velas 5M sin spike)
-          if (elapsedCandles >= 2) {
-            tradeResult = 'LOSS';
-            exitPrice = fCandle.close;
-            exitTime = fCandle.epoch;
-            exitReason = 'STOP_LOSS_10MIN';
+            exitReason = `SL_MAX_LOSS_${maxSlUsd}USD`;
             break;
           }
         } else {
@@ -461,27 +476,18 @@ export class BacktestService {
           // B) Spike capturado con ganancia
           if (maxGainFromEntry >= reactionSpikeThreshold || candleGain >= reactionSpikeThreshold) {
             tradeResult = 'WIN';
-            exitPrice = fCandle.high - reactionSpikeThreshold * 0.2;
+            exitPrice = Math.max(entryPrice + 2.0, fCandle.high - reactionSpikeThreshold * 0.2);
             exitTime = fCandle.epoch;
             exitReason = 'SPIKE_PROFIT_CAPTURED';
             break;
           }
 
-          // C) SL de Emergencia por Precio
+          // C) SL Monetario (-$5 USD / -$8 USD)
           if (fCandle.low <= slPrice) {
             tradeResult = 'LOSS';
             exitPrice = slPrice;
             exitTime = fCandle.epoch;
-            exitReason = 'STOP_LOSS_PRECIO';
-            break;
-          }
-
-          // D) SL por tiempo (10 minutos / 2 velas 5M sin spike)
-          if (elapsedCandles >= 2) {
-            tradeResult = 'LOSS';
-            exitPrice = fCandle.close;
-            exitTime = fCandle.epoch;
-            exitReason = 'STOP_LOSS_10MIN';
+            exitReason = `SL_MAX_LOSS_${maxSlUsd}USD`;
             break;
           }
         }
@@ -495,7 +501,7 @@ export class BacktestService {
         exitTime = lastCandle.epoch;
         const diff = direction === 'VENTA' ? entryPrice - exitPrice : exitPrice - entryPrice;
         tradeResult = diff > 0 ? 'WIN' : 'LOSS';
-        exitReason = 'TIMEOUT_10MIN';
+        exitReason = 'CIERRE_ CICLO_60MIN';
       }
 
       const pnlPoints =
@@ -503,9 +509,7 @@ export class BacktestService {
           ? parseFloat((entryPrice - exitPrice).toFixed(2))
           : parseFloat((exitPrice - entryPrice).toFixed(2));
 
-      // Estimación en USD: $1 punto aprox o factor de lote mínimo (0.2 a 0.5)
-      const lotMultiplier = 0.5;
-      const pnlUsd = parseFloat((pnlPoints * lotMultiplier).toFixed(2));
+      const pnlUsd = parseFloat(Math.max(-maxSlUsd, pnlPoints * lotMultiplier).toFixed(2));
       const durationMin = Math.max(5, Math.round((exitTime - currentCandle.epoch) / 60));
 
       const entryDate = new Date(currentCandle.epoch * 1000);

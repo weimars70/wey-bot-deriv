@@ -33,6 +33,10 @@ export const tradingService = {
     return api.post('/trading/agent-evaluate-now').then((r) => r.data);
   },
 
+  runAgentBacktestOptimize() {
+    return api.post('/trading/agent-backtest-optimize').then((r) => r.data);
+  },
+
   resetCounts(symbol) {
     return api.post('/trading/reset-counts', { symbol }).then((r) => r.data);
   },
