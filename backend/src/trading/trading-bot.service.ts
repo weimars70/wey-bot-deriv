@@ -621,13 +621,19 @@ export class TradingBotService implements OnModuleInit {
           );
         }
 
-        // Asociar el spike inmediatamente a cualquier trade activo que se beneficie de él
+        // Asociar el spike solo si el trade realmente entra en terreno positivo (profit >= $1.50 USD o >= 3.0 pts a favor desde entryPrice)
         for (const trade of this.activeTradesMap.values()) {
           if (trade.symbol === sym && trade.status === 'OPEN') {
             const isFavorable =
               (trade.direction === 'BUY' && currentPrice > prevPrice) ||
               (trade.direction === 'SELL' && currentPrice < prevPrice);
-            if (isFavorable) {
+            const netFavPts =
+              trade.direction === 'BUY'
+                ? currentPrice - trade.entryPrice
+                : trade.entryPrice - currentPrice;
+            const tradeLot = trade.lot || this.getDefaultLotForSymbol(trade.symbol) || 0.5;
+            const netFavUsd = netFavPts * tradeLot;
+            if (isFavorable && (netFavPts >= 3.0 || netFavUsd >= 1.5)) {
               const prevTradeSpike = this.tradeLastSpikeTime.get(trade.id) || 0;
               this.tradeLastSpikeTime.set(trade.id, now);
               trade.hadSpike = true;
@@ -962,8 +968,8 @@ export class TradingBotService implements OnModuleInit {
           }
         }
 
-        // ── 1.5 REGLA USUARIO: SI TUVO SPIKE REAL Y EL RETROCESO LO CUBRE TOTALMENTE, ESPERAR 3 MINUTOS SIN NUEVO SPIKE Y SALIR ──
-        if (trade.hadSpike && (maxProfitUsd >= 3.0 || trade.spikeCount > 0)) {
+        // ── 1.5 REGLA USUARIO: SI TUVO SPIKE REAL EN PROFIT (>= $3 USD) Y EL RETROCESO LO CUBRE TOTALMENTE, ESPERAR 3 MINUTOS SIN NUEVO SPIKE Y SALIR ──
+        if (trade.hadSpike && maxProfitUsd >= 3.0) {
           const lastSpikeTime = this.tradeLastSpikeTime.get(trade.id) || entryMs;
           // El retroceso cubre el spike cuando devuelve la ganancia (PnL <= 0)
           const isSpikeCovered = currentPnlUsd <= 0;

@@ -100,10 +100,15 @@ export class TradingStatsService {
       );
     };
 
-    const closedTrades = trades.filter(
-      (t) => t.status === 'CLOSED' && t.exitReason !== 'MT5_TIMEOUT_NO_FILL',
-    );
-    const openTrades = trades.filter((t) => t.status === 'OPEN');
+    const isIgnoredGhost = (t: TradeRecord) =>
+      t.exitReason === 'MT5_TIMEOUT_NO_FILL' ||
+      t.exitReason === 'ORPHAN_STARTUP_CLEANED' ||
+      String(t.exitReason || '').startsWith('MT5_REJECTED') ||
+      String(t.exitReason || '').startsWith('MT5_ERROR');
+
+    const validTrades = trades.filter((t) => !isIgnoredGhost(t));
+    const closedTrades = validTrades.filter((t) => t.status === 'CLOSED');
+    const openTrades = validTrades.filter((t) => t.status === 'OPEN');
 
     let wins = 0;
     let losses = 0;
@@ -453,7 +458,7 @@ export class TradingStatsService {
       endDate: endOfDay.toISOString().slice(0, 10),
       isRange: startOfDay.toISOString().slice(0, 10) !== endOfDay.toISOString().slice(0, 10),
       summary: {
-        totalTrades: trades.length,
+        totalTrades: validTrades.length,
         openTrades: openTrades.length,
         closedTrades: totalClosed,
         wins,
@@ -470,7 +475,7 @@ export class TradingStatsService {
       bySymbol: bySymbol.sort((a, b) => b.netProfit - a.netProfit),
       byHour,
       byStrategy,
-      trades: trades.slice(0, 500).map((t) => ({
+      trades: validTrades.slice(0, 500).map((t) => ({
         id: t.id,
         symbol: t.symbol,
         strategy: t.strategy,
