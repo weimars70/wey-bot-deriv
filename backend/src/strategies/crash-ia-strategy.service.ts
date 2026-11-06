@@ -1444,31 +1444,33 @@ export class CrashIaStrategyService {
       let mitigated = false;
       let previouslyMitigated = false;
       let broken = false;
+      const currentHourStartEpoch = Math.floor(Date.now() / 3_600_000) * 3600;
 
       // Evaluar historial posterior a la confirmación del impulso
       for (let j = confirmationIndex + 1; j < m5Candles.length; j++) {
         const postClose = Number(m5Candles[j].close);
         const postHigh = Number(m5Candles[j].high);
         const postLow = Number(m5Candles[j].low);
-        const isOldCandle = j < m5Candles.length - 2;
+        const postEpoch = Number(m5Candles[j].epoch) || 0;
+        const isOldCandleOutsideHour = j < m5Candles.length - 2 && postEpoch < currentHourStartEpoch;
 
         if (!isBoom) {
-          if (postClose > obHigh) {
+          if (postClose > obHigh && postEpoch < currentHourStartEpoch) {
             broken = true;
             break;
           }
           if (postHigh >= obMid50) {
             mitigated = true;
-            if (isOldCandle) previouslyMitigated = true;
+            if (isOldCandleOutsideHour) previouslyMitigated = true;
           }
         } else {
-          if (postClose < obLow) {
+          if (postClose < obLow && postEpoch < currentHourStartEpoch) {
             broken = true;
             break;
           }
           if (postLow <= obMid50) {
             mitigated = true;
-            if (isOldCandle) previouslyMitigated = true;
+            if (isOldCandleOutsideHour) previouslyMitigated = true;
           }
         }
       }
@@ -1578,9 +1580,11 @@ export class CrashIaStrategyService {
       const distToBlue = vLinePrice - h1Price;
       if (distToBlue > maxDist) continue;
 
-      // Validar que la caja proyectada desde este pico V NO haya sido invalidada ni gastada después
+      // Validar que la caja proyectada desde este pico V NO haya sido invalidada ni gastada en horas anteriores
+      // REGLA USUARIO: Si dentro de la MISMA HORA el precio vuelve a la zona tras salir en SL o Trailing Stop, se vuelve a operar.
       const candidateCeiling = vLinePrice + 3.0 * m5CandleHeight;
       const candidateMid50 = vLinePrice + 1.5 * m5CandleHeight;
+      const currentHourStartEpoch = Math.floor(Date.now() / 3_600_000) * 3600;
       let invalidatedOrSpent = false;
       let touchedMid50 = false;
 
@@ -1589,14 +1593,16 @@ export class CrashIaStrategyService {
         const postClose = Number(post.close);
         const postHigh = Number(post.high);
         const postDrop = Number(post.open) - postClose;
+        const postEpoch = Number(post.epoch) || 0;
+        const isSameHour = postEpoch >= currentHourStartEpoch;
 
-        // 1. Si el precio cerró superando el techo de la caja V, la zona falló
-        if (postClose > candidateCeiling + m5CandleHeight * 0.35) {
+        // 1. Si el precio cerró superando el techo de la caja V en una hora anterior, la zona falló
+        if (!isSameHour && postClose > candidateCeiling + m5CandleHeight * 0.35) {
           invalidatedOrSpent = true;
           break;
         }
-        // 2. Si ya subió al 50% y luego dio un spike fuerte en velas pasadas, esa zona V ya reaccionó y se gastó
-        if (touchedMid50 && postDrop >= minSpikeDrop) {
+        // 2. Solo se marca como gastada si reaccionó en una hora ANTERIOR (dentro de la misma hora se permite re-entrada al volver a la zona)
+        if (!isSameHour && touchedMid50 && postDrop >= minSpikeDrop) {
           invalidatedOrSpent = true;
           break;
         }
@@ -1662,9 +1668,11 @@ export class CrashIaStrategyService {
       const distToBlue = h1Price - vLinePrice;
       if (distToBlue > maxDist) continue;
 
-      // Validar que la caja proyectada desde este pico Λ NO haya sido invalidada ni gastada después
+      // Validar que la caja proyectada desde este pico Λ NO haya sido invalidada ni gastada en horas anteriores
+      // REGLA USUARIO: Si dentro de la MISMA HORA el precio vuelve a la zona tras salir en SL o Trailing Stop, se vuelve a operar.
       const candidateFloor = vLinePrice - 3.0 * m5CandleHeight;
       const candidateMid50 = vLinePrice - 1.5 * m5CandleHeight;
+      const currentHourStartEpoch = Math.floor(Date.now() / 3_600_000) * 3600;
       let invalidatedOrSpent = false;
       let touchedMid50 = false;
 
@@ -1673,14 +1681,16 @@ export class CrashIaStrategyService {
         const postClose = Number(post.close);
         const postLow = Number(post.low);
         const postJump = postClose - Number(post.open);
+        const postEpoch = Number(post.epoch) || 0;
+        const isSameHour = postEpoch >= currentHourStartEpoch;
 
-        // 1. Si el precio cerró perforando el piso de la caja Λ, la zona falló
-        if (postClose < candidateFloor - m5CandleHeight * 0.35) {
+        // 1. Si el precio cerró perforando el piso de la caja Λ en una hora anterior, la zona falló
+        if (!isSameHour && postClose < candidateFloor - m5CandleHeight * 0.35) {
           invalidatedOrSpent = true;
           break;
         }
-        // 2. Si ya bajó al 50% y luego dio un spike fuerte en velas pasadas, esa zona Λ ya reaccionó y se gastó
-        if (touchedMid50 && postJump >= minSpikeJump) {
+        // 2. Solo se marca como gastada si reaccionó en una hora ANTERIOR (dentro de la misma hora se permite re-entrada al volver a la zona)
+        if (!isSameHour && touchedMid50 && postJump >= minSpikeJump) {
           invalidatedOrSpent = true;
           break;
         }

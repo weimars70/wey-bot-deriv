@@ -94,6 +94,23 @@ export class TradingBotService implements OnModuleInit {
   // Guarda el timestamp cuando un trade que tuvo spike ve su ganancia cubierta por el retroceso (PnL <= 0)
   private tradeSpikeCoveredAt = new Map<string, number>();
 
+  // ── REGLA USUARIO: Re-entrada automática dentro de la MISMA HORA si el índice vuelve a la zona tras salir en SL o Trailing Stop ──
+  private sameHourReentryZones = new Map<
+    string,
+    {
+      symbol: string;
+      normSym: string;
+      direction: 'BUY' | 'SELL';
+      strategy: string;
+      entryPrice: number;
+      stopLossPrice: number | null;
+      exitPrice: number;
+      exitReason: string;
+      exitTimeMs: number;
+      hourEpoch: number;
+    }
+  >();
+
   // Puente directo con MetaTrader 5 (detecta automáticamente si existe la ruta local de Weimar o la de .env)
   private readonly mt5FilesDir = (() => {
     const envDir = process.env.MT5_FILES_DIR;
@@ -1181,6 +1198,9 @@ export class TradingBotService implements OnModuleInit {
       await this.evaluateCrashBoomStrategy();
     }
 
+    // B2. Re-entrada dentro de la MISMA HORA cuando el índice regresa a la zona tras salir en SL o Trailing Stop
+    await this.evaluateSameHourZoneReentries();
+
     // C. Evaluación Estrategia M5++ (Compresión + Ruptura → Spike)
     if (this.m5PlusAutoEnabled) {
       await this.evaluateM5PlusStrategy();
@@ -1457,7 +1477,8 @@ export class TradingBotService implements OnModuleInit {
         }
 
         const cooldownKey = `${sig.symbol}_SPIKE_RADAR`;
-        const cooldownMs = this.getCooldownMsForSymbol(sig.symbol);
+        const isSameHourReentry = this.isSameHourReentryActive(sig.symbol);
+        const cooldownMs = isSameHourReentry ? 45_000 : this.getCooldownMsForSymbol(sig.symbol);
         if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < cooldownMs) continue;
 
         const isHighlyViable = true;
@@ -1510,7 +1531,8 @@ export class TradingBotService implements OnModuleInit {
         }
 
         const cooldownKey = `${sig.symbol}_EA_WEY_SMC`;
-        const cooldownMs = this.getCooldownMsForSymbol(sig.symbol);
+        const isSameHourReentry = this.isSameHourReentryActive(sig.symbol);
+        const cooldownMs = isSameHourReentry ? 45_000 : this.getCooldownMsForSymbol(sig.symbol);
         if (Date.now() - (this.lastTradeOpenedAt.get(cooldownKey) || 0) < cooldownMs) continue;
 
         const isHighlyViable = true;
@@ -1717,7 +1739,8 @@ export class TradingBotService implements OnModuleInit {
       if (Math.max(mt5OpenCount, appOpenCount) >= this.maxTradesPerSymbol) continue;
 
       const lastOpen = this.lastTradeOpenedAt.get(`${sym}_CRASH_BOOM`) || 0;
-      if (Date.now() - lastOpen < 180_000) continue;
+      const isSameHourReentry = this.isSameHourReentryActive(sym);
+      if (Date.now() - lastOpen < (isSameHourReentry ? 45_000 : 180_000)) continue;
 
       try {
         const evalData = await this.crashIaService.evaluateSymbol(sym, 5);
@@ -1828,6 +1851,127 @@ export class TradingBotService implements OnModuleInit {
     }
   }
 
+  /**
+   * Verifica si un símbolo tuvo un cierre real (SL o Trailing Stop) dentro de la MISMA HORA actual.
+   */
+  private isSameHourReentryActive(symbol: string): boolean {
+    const normSym = this.normalizeSymbol(symbol);
+    const zone = this.sameHourReentryZones.get(normSym);
+    if (!zone) return false;
+    const currentHourEpoch = Math.floor(Date.now() / 3_600_000);
+    if (zone.hourEpoch !== currentHourEpoch) {
+      this.sameHourReentryZones.delete(normSym);
+      return false;
+    }
+    return Date.now() - zone.exitTimeMs >= 45_000;
+  }
+
+  /**
+   * REGLA USUARIO:
+   * "cuando cualquier trade se haga y salga sea en sl o por trailing stop,
+   * si el indice vuelve a la zona es decir regresa hacer de nuevo el trade si esta dentro de la misma hora"
+   */
+  private async evaluateSameHourZoneReentries() {
+    if (this.sameHourReentryZones.size === 0) return;
+    if (this.activeTradesMap.size >= this.maxOpenTrades) return;
+
+    const currentHourEpoch = Math.floor(Date.now() / 3_600_000);
+
+    for (const [normSym, zone] of Array.from(this.sameHourReentryZones.entries())) {
+      // Si ya cambió la hora reloj, limpiar la zona de re-entrada
+      if (zone.hourEpoch !== currentHourEpoch) {
+        this.sameHourReentryZones.delete(normSym);
+        continue;
+      }
+
+      if (this.activeTradesMap.size >= this.maxOpenTrades) break;
+      if (this.getOpenTradesCountForBucket('CRASH_BOOM') >= this.maxCrashBoomTrades) break;
+
+      // Esperar al menos 45s tras el cierre para no duplicar en el mismo tick de salida
+      if (Date.now() - zone.exitTimeMs < 45_000) continue;
+
+      // No abrir si ya tiene posición abierta en App o MT5
+      const hasOpenInApp = Array.from(this.activeTradesMap.values()).some(
+        (t) => t.status === 'OPEN' && this.isSameSymbol(t.symbol, zone.symbol),
+      );
+      const hasOpenInMt5 = (this.mt5Positions || []).some(
+        (p) => this.isSameSymbol(p.symbol, zone.symbol) && Number(p.magic) === 999888,
+      );
+      if (hasOpenInApp || hasOpenInMt5) continue;
+
+      try {
+        const evalData = await this.crashIaService.evaluateSymbol(zone.symbol, 5);
+        const currentPrice = this.lastTickPrice.get(zone.symbol) || evalData?.currentPrice || 0;
+        if (!currentPrice || currentPrice <= 0) continue;
+
+        const isBoom = zone.symbol.toUpperCase().includes('BOOM');
+        const m5Height = evalData?.m5CandleHeight || 2.5;
+        const zoneTolerance = Math.max(m5Height * 0.85, 1.5);
+
+        // 1) ¿El precio regresó a la zona original de entrada donde se hizo el trade?
+        const backAtOriginalEntryZone = !isBoom
+          ? currentPrice >= zone.entryPrice - zoneTolerance &&
+            currentPrice <= (zone.stopLossPrice || zone.entryPrice + zoneTolerance * 2.5)
+          : currentPrice <= zone.entryPrice + zoneTolerance &&
+            currentPrice >= (zone.stopLossPrice || zone.entryPrice - zoneTolerance * 2.5);
+
+        // 2) ¿O el precio regresó a la zona activa de Línea Morada -> 50% (Zonas V)?
+        const backAtPurpleZone = Boolean(
+          evalData &&
+            evalData.vLinePrice > 0 &&
+            (evalData.status === 'EN_BASE_CAJA' || evalData.status === 'EN_ZONA_50') &&
+            (!isBoom
+              ? currentPrice >= evalData.vLinePrice && currentPrice <= (evalData.stopLossPrice || evalData.boxCeiling * 1.05)
+              : currentPrice <= evalData.vLinePrice && currentPrice >= (evalData.stopLossPrice || evalData.boxFloor * 0.95)),
+        );
+
+        // 3) Asegurar que después de haber salido (en SL o Trailing Stop) el precio esté de regreso en la zona
+        const distFromExit = Math.abs(currentPrice - zone.exitPrice);
+        const returnedAfterMove = distFromExit >= zoneTolerance * 0.4 || Date.now() - zone.exitTimeMs >= 90_000;
+
+        if ((backAtOriginalEntryZone || backAtPurpleZone) && returnedAfterMove) {
+          const validStrategy = (
+            zone.strategy === 'CRASH_BOOM_IA' ||
+            zone.strategy === 'SPIKE_RADAR' ||
+            zone.strategy === 'EA_WEY_SMC' ||
+            zone.strategy === 'DOUBLE_WICK_MECHA'
+              ? zone.strategy
+              : 'CRASH_BOOM_IA'
+          ) as 'CRASH_BOOM_IA' | 'SPIKE_RADAR' | 'EA_WEY_SMC' | 'DOUBLE_WICK_MECHA';
+
+          const stopLossPrice =
+            evalData?.stopLossPrice ||
+            zone.stopLossPrice ||
+            (!isBoom ? Number((currentPrice + m5Height * 3).toFixed(3)) : Number((currentPrice - m5Height * 3).toFixed(3)));
+
+          this.logger.log(
+            `🔁 [RE-ENTRADA MISMA HORA] ${zone.symbol} (${zone.direction}) regresó a la zona (${currentPrice.toFixed(2)}, entrada previa: ${zone.entryPrice.toFixed(2)}, salida previa: ${zone.exitReason}). Ejecutando nuevo trade dentro de la misma hora.`,
+          );
+
+          const opened = await this.openTrade({
+            strategy: validStrategy,
+            symbol: zone.symbol,
+            mercado: evalData?.mercado || zone.symbol,
+            direction: zone.direction,
+            entryPrice: currentPrice,
+            stopLossPrice,
+            takeProfitPrice: null,
+            isHighlyViable: true,
+            scorePct: 95,
+            isSameHourZoneReentry: true,
+          });
+
+          if (opened) {
+            this.lastTradeOpenedAt.set(`${zone.symbol}_CRASH_BOOM`, Date.now());
+            this.lastTradeOpenedAt.set(`${zone.symbol}_${validStrategy}`, Date.now());
+          }
+        }
+      } catch (e) {
+        // Silencioso
+      }
+    }
+  }
+
   // ════════════════════════════════════════════════════════════════════════════
   // ── 5. APERTURA Y CIERRE DE TRADES ─────────────────────────────────────────
   // ════════════════════════════════════════════════════════════════════════════
@@ -1902,6 +2046,7 @@ export class TradingBotService implements OnModuleInit {
     mt5Comment?: string;
     isHighlyViable?: boolean;
     scorePct?: number | null;
+    isSameHourZoneReentry?: boolean;
   }) {
     // ── REGLA CRÍTICA USUARIO: Si weimarsuber@gmail.com no está logueado en la app, NO hacer autotrade ──
     if (params.strategy !== 'MANUAL_APP') {
@@ -1996,13 +2141,15 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── CANDADO DE 30 MINUTOS TRAS SALIDA EN STOP LOSS EN EL MISMO ÍNDICE ──
+      // REGLA USUARIO: Si está dentro de la MISMA HORA y vuelve a la zona, se permite re-entrar aunque haya salido en SL o Trailing Stop.
       const normSymKey = this.normalizeSymbol(params.symbol);
+      const isSameHourReentry = params.isSameHourZoneReentry === true || this.isSameHourReentryActive(params.symbol);
       const lastSl = Math.max(
         this.lastSymbolSlExitAt.get(params.symbol) || 0,
         this.lastSymbolSlExitAt.get(normSymKey) || 0,
       );
       const elapsedSinceSl = Date.now() - lastSl;
-      if (lastSl > 0 && elapsedSinceSl < this.SYMBOL_SL_COOLDOWN_MS) {
+      if (lastSl > 0 && elapsedSinceSl < this.SYMBOL_SL_COOLDOWN_MS && !isSameHourReentry) {
         const isViableSignal = params.isHighlyViable === true || (params.scorePct != null && params.scorePct >= 85);
         if (!isViableSignal) {
           const remSec = Math.ceil((this.SYMBOL_SL_COOLDOWN_MS - elapsedSinceSl) / 1000);
@@ -2016,6 +2163,10 @@ export class TradingBotService implements OnModuleInit {
             `⚡ [EXCEPCIÓN COOLDOWN SL 30 MIN] ${params.symbol} (${params.strategy}): Enfriamiento activo de 30m, pero se AUTORIZA entrada por ALTA VIABILIDAD (Score: ${params.scorePct || 85}% >= 85%).`,
           );
         }
+      } else if (isSameHourReentry && lastSl > 0 && elapsedSinceSl < this.SYMBOL_SL_COOLDOWN_MS) {
+        this.logger.log(
+          `🔁 [RE-ENTRADA EN LA MISMA HORA AUTORIZADA] ${params.symbol} (${params.strategy}): El índice volvió a la zona dentro de la misma hora tras salir previamente.`,
+        );
       }
 
       // ── CANDADO DE PAUSA HORARIA POR DÉFICIT / PÉRDIDA ACUMULADA ──
@@ -2087,11 +2238,13 @@ export class TradingBotService implements OnModuleInit {
 
       // ── PROTECCIÓN ANTI-RACHA NEGATIVA: COOLDOWN GLOBAL POR SÍMBOLO ──
       // Aplica a todas las estrategias automáticas EXCEPTO H1_NO_WICK, MANUAL_APP y WATCHED_LEVEL
+      const isSameHourZoneReentry = params.isSameHourZoneReentry === true || this.isSameHourReentryActive(params.symbol);
       if (
         params.strategy !== 'MANUAL_APP' &&
         params.strategy !== 'H1_NO_WICK' &&
         params.strategy !== 'WATCHED_LEVEL' &&
-        params.strategy !== 'WATCHED_LEVEL_BT'
+        params.strategy !== 'WATCHED_LEVEL_BT' &&
+        !isSameHourZoneReentry
       ) {
         const lastOpen = this.lastSymbolTradeOpenedAt.get(params.symbol) || 0;
         const elapsed = Date.now() - lastOpen;
@@ -2113,8 +2266,8 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── REGLA USUARIO 1: NO HACER TRADE INMEDIATAMENTE TRAS UN SPIKE (ESPERAR AL MENOS AL 50% DE RETROCESO) ──
-      // Aplica a TODOS los índices Crash y Boom y a cualquier estrategia.
-      if (this.getAssetCategory(params.symbol) === 'CRASH_BOOM') {
+      // Si es una re-entrada porque el índice YA regresó a la zona dentro de la misma hora, permitir la entrada directamente.
+      if (this.getAssetCategory(params.symbol) === 'CRASH_BOOM' && !isSameHourZoneReentry) {
         const isBoom = (params.symbol || '').toUpperCase().includes('BOOM');
         const currentPrice = Number(params.entryPrice) || this.lastTickPrice.get(params.symbol) || 0;
         let spike = this.lastSpikeDetails.get(params.symbol);
@@ -2203,10 +2356,11 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── RETROALIMENTACIÓN ADAPTATIVA IA (FILTRO HORARIO Y CIRCUIT BREAKER) ──
-      // Aplica también a SPIKE_RADAR y EA_WEY_SMC para que el Circuit Breaker (2 SL seguidos) y el filtro horario protejan el capital.
+      // Si es una re-entrada porque el índice regresó a la zona en la misma hora, se permite operar.
       if (
         params.strategy !== 'MANUAL_APP' &&
-        params.strategy !== 'H1_NO_WICK'
+        params.strategy !== 'H1_NO_WICK' &&
+        !isSameHourZoneReentry
       ) {
         const adaptiveCheck = await this.statsService.canTradeAdaptive(params.symbol, params.strategy);
         if (!adaptiveCheck.allowed) {
@@ -2454,7 +2608,35 @@ export class TradingBotService implements OnModuleInit {
       this.lastSymbolSlExitAt.set(trade.symbol, Date.now());
       this.lastSymbolSlExitAt.set(normSym, Date.now());
       this.logger.warn(
-        `🛑 [SL DETECTADO - COOLDOWN 30 MIN] ${trade.symbol} (${trade.strategy}) salió en SL ($${trade.pnlUsd} USD, motivo: ${reason}). Bloqueando re-entrada en este índice por 30 minutos.`,
+        `🛑 [SL DETECTADO - COOLDOWN 30 MIN] ${trade.symbol} (${trade.strategy}) salió en SL ($${trade.pnlUsd} USD, motivo: ${reason}). (Se permitirá re-entrada si vuelve a la zona dentro de la misma hora).`,
+      );
+    }
+
+    // ── REGLA USUARIO: Guardar la zona de entrada al cerrar (en SL o Trailing Stop) para re-entrar si vuelve a la zona en la misma hora ──
+    if (
+      reason !== 'MT5_TIMEOUT_NO_FILL' &&
+      reason !== 'ORPHAN_STARTUP_CLEANED' &&
+      !String(reason || '').includes('NO_FILL') &&
+      !String(reason || '').startsWith('MT5_REJECTED') &&
+      !String(reason || '').startsWith('MT5_ERROR') &&
+      this.isAllowedCrashBoomSymbol(trade.symbol) &&
+      Number(trade.entryPrice) > 0
+    ) {
+      const normSym = this.normalizeSymbol(trade.symbol);
+      this.sameHourReentryZones.set(normSym, {
+        symbol: trade.symbol,
+        normSym,
+        direction: trade.direction,
+        strategy: trade.strategy,
+        entryPrice: Number(trade.entryPrice),
+        stopLossPrice: trade.stopLossPrice ? Number(trade.stopLossPrice) : null,
+        exitPrice: Number(trade.exitPrice || trade.currentPrice || trade.entryPrice),
+        exitReason: reason,
+        exitTimeMs: Date.now(),
+        hourEpoch: Math.floor(Date.now() / 3_600_000),
+      });
+      this.logger.log(
+        `📌 [ZONA GUARDADA MISMA HORA] ${trade.symbol} (${trade.direction}) cerrado por [${reason}] @ ${trade.exitPrice}. Si regresa a la zona (~${trade.entryPrice}) dentro de esta hora, se re-abrirá el trade.`,
       );
     }
 
@@ -3087,6 +3269,28 @@ export class TradingBotService implements OnModuleInit {
               maxProfitUsd: existing.maxProfitUsd || 0,
             });
             this.activeTradesMap.delete(existing.id);
+
+            const currentHourEpoch = Math.floor(Date.now() / 3_600_000);
+            const dealHourEpoch = dealCloseMs > 0 ? Math.floor(dealCloseMs / 3_600_000) : currentHourEpoch;
+            if (
+              dealHourEpoch === currentHourEpoch &&
+              this.isAllowedCrashBoomSymbol(existing.symbol) &&
+              Number(existing.entryPrice) > 0
+            ) {
+              const normSym = this.normalizeSymbol(existing.symbol);
+              this.sameHourReentryZones.set(normSym, {
+                symbol: existing.symbol,
+                normSym,
+                direction: existing.direction,
+                strategy: existing.strategy,
+                entryPrice: Number(existing.entryPrice),
+                stopLossPrice: existing.stopLossPrice ? Number(existing.stopLossPrice) : null,
+                exitPrice: Number(deal.closePrice || existing.entryPrice),
+                exitReason: existing.exitReason || 'MT5_CLOSED',
+                exitTimeMs: dealCloseMs > 0 ? dealCloseMs : Date.now(),
+                hourEpoch: currentHourEpoch,
+              });
+            }
           }
           if (
             existing.strategy === 'MANUAL_APP' ||
