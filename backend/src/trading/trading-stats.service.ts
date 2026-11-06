@@ -1035,10 +1035,11 @@ export class TradingStatsService {
       deployStatus: 'ACTIVO_EN_VPS',
     });
 
+    const logsResult = await this.getAgentOptimizationLogs(30);
     return {
+      ...logsResult,
       ok: true,
       latestLog: saved.log,
-      ...(await this.getAgentOptimizationLogs(30)),
     };
   }
 }
