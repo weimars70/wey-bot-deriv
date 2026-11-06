@@ -677,6 +677,16 @@ void ProcessSingleCommand(string cmdJson)
    // ── A. ACCION: APERTURA (OPEN) ──
    if(action == "OPEN")
    {
+      // RESTRICCION TEMPORAL: por ahora solo aceptar indices Crash/Boom.
+      // Cualquier otro símbolo (forex, metales, step, jump, volatility, etc.) queda rechazado.
+      if(GetSymbolCategory(mt5Sym) != 0)
+      {
+         Print("⛔ [DerivApp Bridge] ENTRADA BLOQUEADA: solo se permiten indices Crash/Boom por ahora. Símbolo recibido: ", mt5Sym, " (", rawSym, ").");
+         WriteFeedback(cmdId, tradeId, "REJECTED_CRASH_BOOM_ONLY", 0, "Only Crash/Boom symbols are allowed right now");
+         MarkAsExecuted(cmdId);
+         return;
+      }
+
       // Candado estricto de concurrencia por grupo (Crash/Boom: 3, XAUUSD: 1, Otros: 2)
       int targetBucket = GetSymbolBucket(mt5Sym);
       int inBucketCount = 0;
