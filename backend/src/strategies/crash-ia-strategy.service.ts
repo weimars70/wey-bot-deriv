@@ -336,16 +336,12 @@ export class CrashIaStrategyService {
     // 10. Filtro 4: Vela Amiga H1
     const { velaAmigaOk, velaAmigaMsg } = this.checkVelaAmigaH1(h1Candles, isBoom);
 
-    // 11. Estado del Precio respecto a la Caja
+    // 11. Estado del Precio respecto a la Caja (entre Línea Morada vLinePrice y Línea Punteada 50% / Techo-Piso)
     let status: CrashIaEvaluation['status'] = 'BAJO_ZONA';
     let statusLabel = 'Fuera de zona';
     let statusSeverity: CrashIaEvaluation['statusSeverity'] = 'info';
 
-    if (!vCandidate) {
-      status = isBoom ? 'SOBRE_ZONA' : 'BAJO_ZONA';
-      statusLabel = isBoom ? 'Sin patrón Λ reciente bajo H1' : 'Sin patrón V reciente sobre H1';
-      statusSeverity = 'info';
-    } else if (!isBoom) {
+    if (!isBoom) {
       // ── Evaluación de estado para CRASH (Venta)
       if (currentPrice > stopLossPrice) {
         status = 'SL_SUPERADO';
@@ -357,15 +353,15 @@ export class CrashIaStrategyService {
         statusSeverity = 'warning';
       } else if (currentPrice >= entryLevel50) {
         status = 'EN_ZONA_50';
-        statusLabel = '⏳ En Caja 50% (Validando OB y filtros)';
+        statusLabel = '🎯 En Zona 50% - Techo (Zona de Entrada)';
         statusSeverity = 'warning';
       } else if (currentPrice >= boxFloor) {
         status = 'EN_BASE_CAJA';
-        statusLabel = 'En base de caja (esperando subida al 50%)';
-        statusSeverity = 'info';
+        statusLabel = '🎯 En Zona Línea Morada -> 50% (Zona de Entrada)';
+        statusSeverity = 'warning';
       } else {
         status = 'BAJO_ZONA';
-        statusLabel = 'Por debajo de la caja V';
+        statusLabel = vCandidate ? 'Por debajo de la caja V' : 'Sin patrón V reciente sobre H1 (Esperando llegada a línea morada)';
         statusSeverity = 'info';
       }
     } else {
@@ -380,15 +376,15 @@ export class CrashIaStrategyService {
         statusSeverity = 'warning';
       } else if (currentPrice <= entryLevel50) {
         status = 'EN_ZONA_50';
-        statusLabel = '⏳ En Caja 50% (Validando OB y filtros)';
+        statusLabel = '🎯 En Zona 50% - Piso (Zona de Entrada)';
         statusSeverity = 'warning';
       } else if (currentPrice <= boxCeiling) {
         status = 'EN_BASE_CAJA';
-        statusLabel = 'En techo de caja (esperando retroceso al 50%)';
-        statusSeverity = 'info';
+        statusLabel = '🎯 En Zona Línea Morada -> 50% (Zona de Entrada)';
+        statusSeverity = 'warning';
       } else {
         status = 'SOBRE_ZONA';
-        statusLabel = 'Por encima de la caja (esperando retroceso)';
+        statusLabel = vCandidate ? 'Por encima de la caja (esperando retroceso)' : 'Sin patrón Λ reciente bajo H1 (Esperando llegada a línea morada)';
         statusSeverity = 'info';
       }
     }
@@ -424,38 +420,24 @@ export class CrashIaStrategyService {
       sym,
     );
 
-    if (retestInfo.isInRetest && !retestInfo.isReadyForEntry) {
-      if (status === 'EN_ZONA_50' || status === 'EN_BASE_CAJA') {
-        status = 'EN_RETESTEO';
-        statusLabel = isBoom
-          ? '⏳ En Zona de Retesteo (Esperando piso o quiebre)'
-          : '⏳ En Zona de Retesteo (Esperando techo o quiebre)';
-        statusSeverity = 'warning';
-      }
-      m5Viability.isViable = false;
-      m5Viability.reason = retestInfo.reason;
-    } else if (retestInfo.isInRetest && retestInfo.isReadyForEntry && m5Viability.isViable) {
+    if (retestInfo.isInRetest && retestInfo.isReadyForEntry && m5Viability.isViable) {
       m5Viability.reason = retestInfo.reason;
     }
 
-    // REGLA USUARIO: "no entrar en zonas que para todos son muy viables, esperar a que saque a todos"
-    // Cazada de liquidez (Liquidity Sweep):
-    // En Crash: entrar en zona profunda de descuento (mid50 o superior), NO en la base ni antes del OB
-    // En Boom: entrar en zona profunda de descuento (mid50 o inferior), NO en la base ni antes del OB
-    const isPostSweepOrDeepOB = activeOrderBlock && activeOrderBlock.inZone && (
-      !isBoom
-        ? currentPrice >= activeOrderBlock.mid50
-        : currentPrice <= activeOrderBlock.mid50
-    );
+    // REGLA USUARIO ZONAS V: Entrar cuando el precio toca/entra entre la Línea Morada (vLinePrice)
+    // y la Línea Punteada (50% / entryLevel50) o dentro del Order Block M5.
+    const isInOrderBlock = Boolean(activeOrderBlock && activeOrderBlock.inZone);
 
     const inEntryZone =
+      status === 'EN_BASE_CAJA' ||
       status === 'EN_ZONA_50' ||
-      Boolean(isPostSweepOrDeepOB);
+      isInOrderBlock;
 
-    const canSell = Boolean(!isBoom && inEntryZone && trendOk && rsiOk && greenOk && m5Viability.isViable);
-    const canBuy = Boolean(isBoom && inEntryZone && trendOk && rsiOk && greenOk && m5Viability.isViable);
+    // No bloquear por M15 en contra (trendOk) cuando el retroceso llega a la Línea Morada / Caja 50%,
+    // ya que el movimiento de acercamiento a la zona ocurre en dirección contraria al spike.
+    const canSell = Boolean(!isBoom && inEntryZone && rsiOk && greenOk && m5Viability.isViable);
+    const canBuy = Boolean(isBoom && inEntryZone && rsiOk && greenOk && m5Viability.isViable);
 
-    // Solo mostrar badge VERDE (success) cuando TODOS los filtros institucionales y el OB M5 están confirmados
     if (canSell || canBuy) {
       statusLabel = isBoom
         ? '🎯 ZONA SNIPER CONFIRMADA (BUY)'
@@ -526,14 +508,15 @@ export class CrashIaStrategyService {
       this.logger.debug(`Error cargando gaps para ${sym}: ${e?.message}`);
     }
 
-    let evalScore = 50;
-    if (trendOk) evalScore += 10;
+    let evalScore = 55;
+    if (inEntryZone) evalScore += 15;
     if (rsiOk) evalScore += 10;
-    if (velaAmigaOk) evalScore += 10;
-    if (greenOk) evalScore += 5;
-    if (activeOrderBlock && (activeOrderBlock.status === 'FRESCO' || activeOrderBlock.inZone)) evalScore += 10;
-    if (vCandidate) evalScore += 5;
+    if (greenOk) evalScore += 10;
     if (m5Viability && m5Viability.isViable) evalScore += 10;
+    if (trendOk) evalScore += 5;
+    if (velaAmigaOk) evalScore += 5;
+    if (activeOrderBlock && (activeOrderBlock.status === 'FRESCO' || activeOrderBlock.inZone)) evalScore += 5;
+    if (vCandidate) evalScore += 5;
     evalScore = Math.min(100, evalScore);
 
     return {
@@ -1190,61 +1173,31 @@ export class CrashIaStrategyService {
     distToReaction: number;
     reactionType: 'ORDER_BLOCK_M5' | 'SOPORTE_ESTRUCTURAL_M5' | 'RESISTENCIA_ESTRUCTURAL_M5' | 'RETROCESO_50_M5';
   } {
-    if (!hasValidVPattern) {
-      return {
-        isViable: false,
-        reason: `En M5 no hay patrón ${isBoom ? 'Λ' : 'V'} institucional fresco cerca de la línea H1 (últimas 3h)`,
-        targetReactionPrice: parseFloat(entryLevel50.toFixed(3)),
-        distToReaction: parseFloat(Math.abs(currentPrice - entryLevel50).toFixed(3)),
-        reactionType: 'RETROCESO_50_M5',
-      };
-    }
-
     // 1. Prioridad Principal: Order Block Institucional FRESCO (Primer toque no mitigado) en M5
     if (activeOB && (activeOB.status === 'EN_ZONA' || activeOB.status === 'FRESCO')) {
       const targetReactionPrice = activeOB.mid50;
       const obSpan = Math.max(activeOB.high - activeOB.low, 0.5);
-      const tolerance = Math.min(obSpan * 0.25, m5CandleHeight * 0.35);
+      const tolerance = Math.min(obSpan * 0.35, m5CandleHeight * 0.5);
       const distToReaction = parseFloat(
         ((isBoom ? currentPrice - targetReactionPrice : targetReactionPrice - currentPrice)).toFixed(3),
       );
 
-      // En Crash: vender en zona del OB (mid50 a techo y holgura de reacción)
-      // En Boom: comprar en zona del OB (mid50 a piso y holgura de reacción)
       const inOptimalEntryBand = isBoom
         ? currentPrice <= activeOB.high + tolerance && currentPrice >= activeOB.low - tolerance
         : currentPrice >= activeOB.low - tolerance && currentPrice <= activeOB.high + tolerance;
 
-      const rejectionOrDeceleration = this.hasOrderBlockRejectionOrDeceleration(
-        m5Candles,
-        isBoom,
-        activeOB.low,
-        activeOB.high,
-      );
-
-      // REGLA USUARIO: No entrar en zonas retail evidentes ("esperar a que el mercado saque a todos").
-      // Se exige que el precio haya penetrado la zona del OB y muestre mecha de rechazo o desaceleración (cazada de liquidez completada).
-      const isViable = inOptimalEntryBand && rejectionOrDeceleration;
-
-      let reason = '';
-      if (!inOptimalEntryBand) {
-        reason = `Esperar llegada al Order Block Fresco (${activeOB.mid50}; rango ${activeOB.low} - ${activeOB.high})`;
-      } else if (!rejectionOrDeceleration) {
-        reason = `En zona OB (${activeOB.mid50}): Esperando barrido de liquidez y mecha de rechazo M5 tras sacar a los que entraron antes`;
-      } else {
-        reason = `Confluencia Sniper M5: Cazada de liquidez completada en Order Block Fresco (${activeOB.mid50}) + Rechazo M5`;
+      if (inOptimalEntryBand) {
+        return {
+          isViable: true,
+          reason: `Zona Order Block Fresco M5 activa (${activeOB.low} - ${activeOB.high}) en confluencia con Línea Morada`,
+          targetReactionPrice,
+          distToReaction,
+          reactionType: 'ORDER_BLOCK_M5',
+        };
       }
-
-      return {
-        isViable,
-        reason,
-        targetReactionPrice,
-        distToReaction,
-        reactionType: 'ORDER_BLOCK_M5',
-      };
     }
 
-    // 2. Segunda opción: Cluster Real de Doble/Triple Rechazo de Spikes en el MISMO nivel (no promedio aritmético)
+    // 2. Segunda opción: Cluster Real de Doble/Triple Rechazo de Spikes en el MISMO nivel
     if (m5Candles && m5Candles.length >= 12) {
       const clusterTolerance = Math.max(m5CandleHeight * 0.55, 1.2);
       const minSpikePts = Math.max(m5CandleHeight * 1.6, 4.0);
@@ -1259,11 +1212,10 @@ export class CrashIaStrategyService {
           }
         }
 
-        // Buscar si al menos 2 spikes nacieron exactamente en el mismo soporte (cluster real) y no fue roto
         let bestClusterPrice: number | null = null;
         for (const basePrice of spikeOrigins) {
           const touches = spikeOrigins.filter((p) => Math.abs(p - basePrice) <= clusterTolerance);
-          if (touches.length >= 2 && basePrice <= entryLevel50 + clusterTolerance && basePrice >= boxFloor - clusterTolerance) {
+          if (touches.length >= 2 && basePrice <= boxCeiling + clusterTolerance && basePrice >= boxFloor - clusterTolerance) {
             bestClusterPrice = parseFloat((touches.reduce((a, b) => a + b, 0) / touches.length).toFixed(3));
             break;
           }
@@ -1272,21 +1224,15 @@ export class CrashIaStrategyService {
         if (bestClusterPrice !== null) {
           const distToReaction = parseFloat((currentPrice - bestClusterPrice).toFixed(3));
           const nearSupport = Math.abs(distToReaction) <= clusterTolerance;
-          const rejectionOk = this.hasOrderBlockRejectionOrDeceleration(
-            m5Candles,
-            true,
-            bestClusterPrice - clusterTolerance,
-            bestClusterPrice + clusterTolerance,
-          );
-          return {
-            isViable: nearSupport && rejectionOk,
-            reason: nearSupport && rejectionOk
-              ? `Doble/Triple soporte institucional de spikes confirmado en ${bestClusterPrice}`
-              : `Esperar toque y rechazo en cluster de soporte M5 (${bestClusterPrice}; dist ${distToReaction} pts)`,
-            targetReactionPrice: bestClusterPrice,
-            distToReaction,
-            reactionType: 'SOPORTE_ESTRUCTURAL_M5',
-          };
+          if (nearSupport) {
+            return {
+              isViable: true,
+              reason: `Doble/Triple soporte institucional de spikes confirmado en ${bestClusterPrice}`,
+              targetReactionPrice: bestClusterPrice,
+              distToReaction,
+              reactionType: 'SOPORTE_ESTRUCTURAL_M5',
+            };
+          }
         }
       } else {
         const spikeOrigins: number[] = [];
@@ -1301,7 +1247,7 @@ export class CrashIaStrategyService {
         let bestClusterPrice: number | null = null;
         for (const topPrice of spikeOrigins) {
           const touches = spikeOrigins.filter((p) => Math.abs(p - topPrice) <= clusterTolerance);
-          if (touches.length >= 2 && topPrice >= entryLevel50 - clusterTolerance && topPrice <= boxCeiling + clusterTolerance) {
+          if (touches.length >= 2 && topPrice >= boxFloor - clusterTolerance && topPrice <= boxCeiling + clusterTolerance) {
             bestClusterPrice = parseFloat((touches.reduce((a, b) => a + b, 0) / touches.length).toFixed(3));
             break;
           }
@@ -1310,31 +1256,32 @@ export class CrashIaStrategyService {
         if (bestClusterPrice !== null) {
           const distToReaction = parseFloat((bestClusterPrice - currentPrice).toFixed(3));
           const nearResistance = Math.abs(distToReaction) <= clusterTolerance;
-          const rejectionOk = this.hasOrderBlockRejectionOrDeceleration(
-            m5Candles,
-            false,
-            bestClusterPrice - clusterTolerance,
-            bestClusterPrice + clusterTolerance,
-          );
-          return {
-            isViable: nearResistance && rejectionOk,
-            reason: nearResistance && rejectionOk
-              ? `Doble/Triple resistencia institucional de spikes confirmada en ${bestClusterPrice}`
-              : `Esperar toque y rechazo en cluster de resistencia M5 (${bestClusterPrice}; dist ${distToReaction} pts)`,
-            targetReactionPrice: bestClusterPrice,
-            distToReaction,
-            reactionType: 'RESISTENCIA_ESTRUCTURAL_M5',
-          };
+          if (nearResistance) {
+            return {
+              isViable: true,
+              reason: `Doble/Triple resistencia institucional de spikes confirmada en ${bestClusterPrice}`,
+              targetReactionPrice: bestClusterPrice,
+              distToReaction,
+              reactionType: 'RESISTENCIA_ESTRUCTURAL_M5',
+            };
+          }
         }
       }
     }
 
-    // 3. Sin Order Block Fresco ni Cluster de Spikes: NO es viable (se elimina el fallback débil del 50% vacío)
-    const targetReactionPrice = parseFloat(entryLevel50.toFixed(3));
+    // 3. Zona de Línea Morada a Línea Punteada 50% (y Caja V/Λ o Línea H1):
+    // Viable en cuanto el precio toca la Línea Morada y se mantiene dentro de la caja.
+    const inPurpleToBoxZone = isBoom
+      ? currentPrice <= boxCeiling && currentPrice >= boxFloor
+      : currentPrice >= boxFloor && currentPrice <= boxCeiling;
+
+    const targetReactionPrice = parseFloat((isBoom ? boxCeiling : boxFloor).toFixed(3));
     const distToReaction = parseFloat(Math.abs(currentPrice - targetReactionPrice).toFixed(3));
     return {
-      isViable: false,
-      reason: `Bloqueado: La Caja ${isBoom ? 'Λ' : 'V'} (${targetReactionPrice}) no tiene un Order Block M5 FRESCO ni doble techo/piso de spikes que la respalde`,
+      isViable: inPurpleToBoxZone,
+      reason: inPurpleToBoxZone
+        ? `Precio en zona activa entre Línea Morada (${targetReactionPrice}) y 50% (${entryLevel50.toFixed(2)})`
+        : `Esperando llegada a la Línea Morada (${targetReactionPrice}; dist ${distToReaction} pts)`,
       targetReactionPrice,
       distToReaction,
       reactionType: 'RETROCESO_50_M5',

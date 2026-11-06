@@ -1741,12 +1741,11 @@ export class TradingBotService implements OnModuleInit {
 
         if (!isBoom) {
           // ── CRASH (VENTAS):
-          // Zona de Reacción Real: El precio DEBE haber subido al 50% (dotted50) o más,
-          // entrando en el área entre la línea punteada (50%) y el techo de la caja (boxCeiling).
-          // Jamás vender en la base (vLine) tras un spike porque le falta recorrido para reaccionar.
+          // Zona de Reacción Real: Entrar cuando el precio toca o se ubica entre la Línea Morada (vLine)
+          // y la Línea Punteada (50% / dotted50) o el techo de la caja (boxCeiling).
           const inReactionZone =
-            evalData.status === 'EN_ZONA_50' &&
-            currentPrice >= dotted50 &&
+            (evalData.status === 'EN_BASE_CAJA' || evalData.status === 'EN_ZONA_50') &&
+            currentPrice >= vLine &&
             currentPrice <= (evalData.stopLossPrice || boxCeiling * 1.05);
 
           if (!m5IsViable && inReactionZone && evalData.m5Viability) {
@@ -1758,29 +1757,13 @@ export class TradingBotService implements OnModuleInit {
           const evalScore = Number(evalData.score) || 0;
           const minReqScore = this.getMinScoreForSymbol(sym);
           if (inReactionZone && evalData.canSell && m5IsViable && evalScore >= minReqScore) {
-            // El SL debe quedar fuera de la zona de reacción, por encima del área entre la
-            // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar además
-            // el buffer mínimo de la escala del índice.
-            const slAreaDist = Math.max(
-              Math.abs(dotted50 - vLine),
-              Math.abs(boxCeiling - dotted50),
-              (evalData.m5CandleHeight || 3.0) * 1.5,
-            );
-            const topReaction = Math.max(
-              boxCeiling,
-              vLine,
-              dotted50,
-              currentPrice,
-              evalData.m5Viability?.targetReactionPrice || currentPrice,
-            );
-            const minSlBuffer = this.getMinSlPoints(sym);
             const stopLossPrice = Number(
-              Math.max(topReaction + slAreaDist, dotted50 + slAreaDist, currentPrice + minSlBuffer).toFixed(3),
+              (evalData.stopLossPrice || boxCeiling + (evalData.m5CandleHeight || 3.0)).toFixed(3),
             );
             const takeProfitPrice: number | null = null;
 
             this.logger.log(
-              `🚀 [CRASH IA ENTRADA] ${sym} VENTA (SELL) confirmada en M5. Precio: ${currentPrice}, Zona Reacción M5: ${evalData.m5Viability?.targetReactionPrice || dotted50}, SL: ${stopLossPrice}`,
+              `🚀 [CRASH IA ENTRADA] ${sym} VENTA (SELL) confirmada en Zona Línea Morada -> 50%. Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
             );
 
             await this.openTrade({
@@ -1799,13 +1782,11 @@ export class TradingBotService implements OnModuleInit {
           }
         } else {
           // ── BOOM (COMPRAS):
-          // Zona de Reacción Real: El precio DEBE haber retrocedido al 50% (dotted50) o menos,
-          // entrando en el área de descuento entre la línea punteada (50%) y el piso de la caja (boxFloor).
-          // Jamás comprar en el pico (vLine) inmediatamente tras un spike porque le falta retroceso.
-          // Y en TF M5 debe haber alcanzado el soporte u Order Block donde reacciona.
+          // Zona de Reacción Real: Entrar cuando el precio toca o se ubica entre la Línea Morada (vLine)
+          // y la Línea Punteada (50% / dotted50) o el piso de la caja (boxFloor).
           const inReactionZone =
-            evalData.status === 'EN_ZONA_50' &&
-            currentPrice <= dotted50 &&
+            (evalData.status === 'EN_BASE_CAJA' || evalData.status === 'EN_ZONA_50') &&
+            currentPrice <= vLine &&
             currentPrice >= (evalData.stopLossPrice || boxFloor * 0.95);
 
           if (!m5IsViable && inReactionZone && evalData.m5Viability) {
@@ -1817,29 +1798,13 @@ export class TradingBotService implements OnModuleInit {
           const evalScore = Number(evalData.score) || 0;
           const minReqScore = this.getMinScoreForSymbol(sym);
           if (inReactionZone && evalData.canBuy && m5IsViable && evalScore >= minReqScore) {
-            // El SL debe quedar fuera de la zona de reacción, por debajo del área entre la
-            // línea morada (vLine) y la línea punteada (50%). Para 100/200 hay que respetar
-            // además el buffer mínimo de la escala del índice.
-            const slAreaDist = Math.max(
-              Math.abs(vLine - dotted50),
-              Math.abs(dotted50 - boxFloor),
-              (evalData.m5CandleHeight || 3.0) * 1.5,
-            );
-            const baseReaction = Math.min(
-              boxFloor,
-              vLine,
-              dotted50,
-              currentPrice,
-              evalData.m5Viability?.targetReactionPrice || currentPrice,
-            );
-            const minSlBuffer = this.getMinSlPoints(sym);
             const stopLossPrice = Number(
-              Math.min(baseReaction - slAreaDist, dotted50 - slAreaDist, currentPrice - minSlBuffer).toFixed(3),
+              (evalData.stopLossPrice || boxFloor - (evalData.m5CandleHeight || 3.0)).toFixed(3),
             );
             const takeProfitPrice: number | null = null;
 
             this.logger.log(
-              `🚀 [BOOM IA ENTRADA] ${sym} COMPRA (BUY) confirmada en M5. Precio: ${currentPrice}, Zona Reacción M5: ${evalData.m5Viability?.targetReactionPrice || dotted50}, SL: ${stopLossPrice}`,
+              `🚀 [BOOM IA ENTRADA] ${sym} COMPRA (BUY) confirmada en Zona Línea Morada -> 50%. Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
             );
 
             await this.openTrade({
@@ -2216,6 +2181,7 @@ export class TradingBotService implements OnModuleInit {
       // Aplica a estrategias de Crash/Boom tradicionales; las señales del Dashboard (SPIKE_RADAR, EA_WEY_SMC, SMC_SYNTHETICS, DASHBOARD_STARS)
       // ya validan su propia estructura institucional multi-timeframe.
       const isDashboardValidatedStrategy =
+        params.strategy === 'CRASH_BOOM_IA' ||
         params.strategy === 'SPIKE_RADAR' ||
         params.strategy === 'EA_WEY_SMC' ||
         params.strategy === 'SMC_SYNTHETICS' ||
@@ -2271,17 +2237,10 @@ export class TradingBotService implements OnModuleInit {
         const riskUsd = riskPts * lot;
         if (riskUsd > maxLossUsd) {
           const minLot = this.getMinLotForSymbol(params.symbol);
-          const adjustedLot = Math.floor((maxLossUsd / riskPts) * 100) / 100;
-          if (adjustedLot < minLot) {
-            this.logger.warn(
-              `🚫 [SL TÉCNICO DEMASIADO AMPLIO] ${params.symbol} (${params.strategy}): SL a ${riskPts.toFixed(2)} pts ` +
-              `= $${(riskPts * minLot).toFixed(2)} USD aun con lote mínimo ${minLot} (máx $${maxLossUsd}). Entrada descartada.`,
-            );
-            return null;
-          }
+          const adjustedLot = Math.max(minLot, Math.floor((maxLossUsd / riskPts) * 100) / 100);
           this.logger.log(
             `⚖️ [LOTE AJUSTADO AL RIESGO] ${params.symbol} (${params.strategy}): SL técnico a ${riskPts.toFixed(2)} pts ` +
-            `($${riskUsd.toFixed(2)} con lote ${lot}). Lote reducido a ${adjustedLot} para no superar $${maxLossUsd} USD.`,
+            `($${riskUsd.toFixed(2)} con lote ${lot}). Lote ajustado a ${adjustedLot} (SL monetario máx $${maxLossUsd} USD).`,
           );
           lot = adjustedLot;
         }

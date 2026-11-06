@@ -43,6 +43,7 @@ export class TradingStatsService {
   private adaptiveEnabled = true;
   private minWinRateThreshold = 40.0; // WinRate mínimo aceptable en una hora para permitir trades (%)
   private minSamplesForHourFilter = 3;  // Muestra mínima de trades en una hora para aplicar filtro
+  private blockedHoursSet = new Set<number>([22]); // Horas bloqueadas dinámicamente por el Agente IA según horario y resultados
   private maxConsecutiveLosses = 2;     // 2 pérdidas seguidas activan pausa preventiva
   private circuitBreakerCooldownMs = 90 * 60 * 1000; // 90 minutos de pausa preventiva tras 2 SL seguidos
 
@@ -550,9 +551,9 @@ export class TradingStatsService {
     const currentHour = new Date().getHours();
     const symUp = (symbol || '').toUpperCase();
 
-    // 0. Bloqueo horario aprendido del Backtest Mensual (30 días): Hora 22:00 (6.3% WinRate / -$24.78 USD)
-    if (currentHour === 22) {
-      const msg = `⛔ [FILTRO BACKTEST 30 DÍAS] ${symUp}: La franja 22:00 - 22:59 demostró alta tasa de barridos en el backtest mensual. Entrada bloqueada.`;
+    // 0. Bloqueo horario aprendido dinámicamente por el Agente IA (ej. Hora 22:00 del backtest o franjas con racha negativa)
+    if (this.blockedHoursSet.has(currentHour)) {
+      const msg = `⛔ [FILTRO HORARIO AGENTE IA] ${symUp}: La franja ${currentHour}:00 - ${currentHour}:59 está restringida por baja efectividad histórica/horario. Entrada bloqueada.`;
       this.logger.warn(msg);
       return { allowed: false, reason: msg };
     }
@@ -962,6 +963,7 @@ export class TradingStatsService {
     let userBad = 0;
     let prematureSlCount = 0;
     const symbolPerf = new Map<string, { wins: number; losses: number; net: number }>();
+    const hourPerfMap = new Map<number, { wins: number; losses: number; net: number }>();
 
     for (const t of validClosed) {
       const pnl = Number((t.pnlUsd ?? (t.pnlPoints || 0) * (t.lot || 0.5)).toFixed(2));
@@ -983,6 +985,15 @@ export class TradingStatsService {
       if (isLoss) cur.losses++;
       cur.net += pnl;
       symbolPerf.set(t.symbol, cur);
+
+      const h = t.hourOfDay !== null && t.hourOfDay !== undefined
+        ? Number(t.hourOfDay)
+        : new Date(Number(t.entryTime) * 1000).getHours();
+      const hCur = hourPerfMap.get(h) || { wins: 0, losses: 0, net: 0 };
+      if (isWin) hCur.wins++;
+      if (isLoss) hCur.losses++;
+      hCur.net += pnl;
+      hourPerfMap.set(h, hCur);
     }
 
     const total = validClosed.length;
@@ -995,7 +1006,23 @@ export class TradingStatsService {
       if (st.net > 2) bestSymbols.push(`${sym} (+$${st.net.toFixed(2)}, ${st.wins}W/${st.losses}L)`);
     }
 
-    const actions: string[] = [];
+    const newlyBlockedHours: string[] = [];
+    const bestHours: string[] = [];
+    for (const [h, hSt] of hourPerfMap.entries()) {
+      const hTotal = hSt.wins + hSt.losses;
+      const hWr = hTotal > 0 ? (hSt.wins / hTotal) * 100 : 0;
+      if (hTotal >= 3 && hWr < 25 && hSt.net < -4) {
+        this.blockedHoursSet.add(h);
+        newlyBlockedHours.push(`${h}:00 (${hWr.toFixed(0)}% WR, $${hSt.net.toFixed(2)})`);
+      } else if (hTotal >= 3 && hWr >= 55 && h !== 22) {
+        this.blockedHoursSet.delete(h);
+        bestHours.push(`${h}:00 (${hWr.toFixed(0)}% WR, +$${hSt.net.toFixed(2)})`);
+      }
+    }
+
+    const actions: string[] = [
+      'Zonas V (CRASH_BOOM_IA) habilitada para entrar directamente entre la Línea Morada (vLinePrice) y la Línea Punteada (50%), incluyendo soporte/resistencia H1 y Order Blocks M5 sin bloqueo por retroceso M15.',
+    ];
     if (winRatePct < 45 && total >= 4) {
       this.minWinRateThreshold = 45.0;
       this.circuitBreakerCooldownMs = 120 * 60 * 1000;
@@ -1008,6 +1035,15 @@ export class TradingStatsService {
       actions.push(
         `Parámetros adaptativos verificados: umbral horario en ${this.minWinRateThreshold}% y pausa Circuit Breaker en 90 min tras 2 SL consecutivos.`,
       );
+    }
+
+    if (newlyBlockedHours.length > 0) {
+      actions.push(`Ajuste de Horario IA: Se bloquearon las franjas horarias con racha negativa: ${newlyBlockedHours.join(', ')}.`);
+    } else {
+      actions.push(`Filtro de Horario IA activo: Franjas restringidas actualmente [${Array.from(this.blockedHoursSet).map((h) => `${h}:00`).join(', ')}].`);
+    }
+    if (bestHours.length > 0) {
+      actions.push(`Mejores horarios detectados: ${bestHours.join(', ')}.`);
     }
 
     if (worstSymbols.length > 0) {
