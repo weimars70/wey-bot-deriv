@@ -25,6 +25,14 @@ export const tradingService = {
     return api.post(`/trading/rate/${id}`, { rating, notes }).then((r) => r.data);
   },
 
+  getAgentLogs(limit = 30) {
+    return api.get(`/trading/agent-logs?limit=${limit}`).then((r) => r.data);
+  },
+
+  runAgentEvaluationNow() {
+    return api.post('/trading/agent-evaluate-now').then((r) => r.data);
+  },
+
   resetCounts(symbol) {
     return api.post('/trading/reset-counts', { symbol }).then((r) => r.data);
   },

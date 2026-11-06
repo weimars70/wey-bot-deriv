@@ -104,6 +104,21 @@ export class TradingBotController {
     return this.statsService.rateTrade(id, rating, notes);
   }
 
+  @Get('agent-logs')
+  getAgentLogs(@Query('limit') limit?: number) {
+    return this.statsService.getAgentOptimizationLogs(limit ? Number(limit) : 30);
+  }
+
+  @Post('agent-logs')
+  createAgentLog(@Body() body: any) {
+    return this.statsService.createAgentOptimizationLog(body || {});
+  }
+
+  @Post('agent-evaluate-now')
+  runAgentEvaluationNow() {
+    return this.statsService.runAgentEvaluationNow();
+  }
+
   @Post('reset-counts')
   resetCounts(@Body('symbol') symbol?: string) {
     return this.tradingService.resetSymbolTradesCount(symbol);

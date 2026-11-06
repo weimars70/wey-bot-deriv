@@ -25,6 +25,9 @@
         indicator-color="indigo-5"
       >
         <q-tab name="live" icon="analytics" label="Informe Diario en Vivo" class="text-weight-bold q-px-md" />
+        <q-tab name="agent" icon="smart_toy" label="Bitácora del Agente IA" class="text-weight-bold q-px-md">
+          <q-badge v-if="agentLogs.length > 0" color="emerald-8" text-color="white" :label="agentLogs.length" class="q-ml-xs" />
+        </q-tab>
         <q-tab name="backtest" icon="biotech" label="Simulador & Backtesting IA" class="text-weight-bold q-px-md" />
       </q-tabs>
     </div>
@@ -773,6 +776,195 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════════════════ -->
+    <!-- ── PESTAÑA AGENTE IA: BITÁCORA DE EJECUCIONES Y OPTIMIZACIÓN EA ──── -->
+    <!-- ══════════════════════════════════════════════════════════════════════ -->
+    <div v-else-if="activeTab === 'agent'">
+      <!-- Cabecera de Estado del Agente -->
+      <q-card flat class="bg-slate-900 border-indigo q-pa-md q-mb-md" style="border-left: 4px solid #10b981;">
+        <div class="row items-center justify-between flex-wrap q-gutter-y-sm">
+          <div class="row items-center q-gutter-sm">
+            <q-avatar size="46px" color="emerald-10" text-color="emerald-3" icon="smart_toy" />
+            <div>
+              <div class="row items-center q-gutter-xs">
+                <span class="text-h6 text-weight-bolder text-white">
+                  {{ agentScheduleInfo.name || 'WeyBot Daily EA & Strategy Optimizer' }}
+                </span>
+                <q-badge color="emerald-8" text-color="white" label="ACTIVO · AUTO-DEPLOY VPS" class="text-weight-bold" />
+              </div>
+              <div class="text-caption text-slate-300 q-mt-xs font-mono">
+                ⏰ Horario programado: <b>{{ agentScheduleInfo.cron || 'Todos los días a las 11:00 PM (America/Bogota)' }}</b>
+                · 🎯 EA: <b>{{ agentScheduleInfo.targetEa || 'DerivApp_Bridge_EA.mq5' }}</b>
+                · 🖥️ VPS: <b>{{ agentScheduleInfo.vpsHost || 'administrator@38.247.166.208' }}</b>
+              </div>
+            </div>
+          </div>
+
+          <div class="row items-center q-gutter-sm">
+            <q-btn
+              outline
+              color="indigo-4"
+              icon="refresh"
+              label="Actualizar Bitácora"
+              no-caps
+              class="text-weight-bold"
+              :loading="agentLoading"
+              @click="fetchAgentLogs"
+            />
+            <q-btn
+              unelevated
+              color="emerald-7"
+              icon="bolt"
+              label="Ejecutar Diagnóstico IA Ahora"
+              no-caps
+              class="text-weight-bold"
+              :loading="agentEvaluating"
+              @click="triggerAgentEvaluationNow"
+            >
+              <q-tooltip>Analiza las últimas 48h de operaciones (incluyendo tus 👍/👎), ajusta filtros y registra el reporte</q-tooltip>
+            </q-btn>
+          </div>
+        </div>
+
+        <!-- Parámetros actuales del motor adaptativo -->
+        <div v-if="agentScheduleInfo.adaptiveConfig" class="row q-col-gutter-sm q-mt-sm">
+          <div class="col-12 col-sm-4">
+            <div class="bg-slate-950 q-pa-sm rounded-borders border-slate text-caption font-mono">
+              <span class="text-slate-400">Filtro WinRate Mínimo/Hora:</span>
+              <b class="text-emerald-4 q-ml-xs">{{ agentScheduleInfo.adaptiveConfig.minWinRateThreshold }}%</b>
+            </div>
+          </div>
+          <div class="col-12 col-sm-4">
+            <div class="bg-slate-950 q-pa-sm rounded-borders border-slate text-caption font-mono">
+              <span class="text-slate-400">Circuit Breaker Racha:</span>
+              <b class="text-amber-4 q-ml-xs">{{ agentScheduleInfo.adaptiveConfig.maxConsecutiveLosses }} pérdidas seguidas</b>
+            </div>
+          </div>
+          <div class="col-12 col-sm-4">
+            <div class="bg-slate-950 q-pa-sm rounded-borders border-slate text-caption font-mono">
+              <span class="text-slate-400">Tiempo de Enfriamiento:</span>
+              <b class="text-sky-4 q-ml-xs">{{ agentScheduleInfo.adaptiveConfig.circuitBreakerMinutes }} minutos</b>
+            </div>
+          </div>
+        </div>
+      </q-card>
+
+      <!-- Lista Cronológica de Corridas del Agente -->
+      <div v-if="agentLogs.length === 0 && !agentLoading" class="q-pa-xl text-center bg-slate-900 border-slate rounded-borders">
+        <q-icon name="history_Toggle_off" size="48px" color="slate-500" />
+        <div class="text-subtitle1 text-slate-400 q-mt-sm">Aún no hay registros del agente.</div>
+        <div class="text-caption text-slate-500">Haz clic en "Ejecutar Diagnóstico IA Ahora" para generar la primera evaluación en vivo.</div>
+      </div>
+
+      <div v-else class="column q-gutter-md">
+        <q-card
+          v-for="log in agentLogs"
+          :key="log.id"
+          flat
+          class="bg-slate-900 border-slate q-pa-md rounded-borders"
+        >
+          <!-- Encabezado de la corrida -->
+          <div class="row items-center justify-between flex-wrap q-gutter-y-xs q-pb-sm" style="border-bottom: 1px solid #1e293b;">
+            <div class="row items-center q-gutter-sm">
+              <q-badge
+                :color="log.triggerType === 'SCHEDULED_23H' ? 'indigo-8' : log.triggerType === 'MANUAL_UI' ? 'teal-8' : 'purple-8'"
+                text-color="white"
+                :label="log.triggerType === 'SCHEDULED_23H' ? '⏰ CORRIDA 11:00 PM' : log.triggerType === 'MANUAL_UI' ? '⚡ DIAGNÓSTICO EN VIVO' : '🛠️ AUDITORÍA Y DESPLIEGUE'"
+                class="text-weight-bold q-px-sm py-1"
+              />
+              <span class="text-subtitle1 text-weight-bolder text-white font-mono">
+                {{ formatAgentRunDate(log.runAt) }}
+              </span>
+              <span class="text-caption text-slate-400 font-mono">
+                · Período: <b>{{ log.periodAnalyzed }}</b>
+              </span>
+            </div>
+
+            <div class="row items-center q-gutter-xs font-mono">
+              <q-badge
+                v-if="log.commitHash && log.commitHash !== '—'"
+                color="slate-800"
+                text-color="amber-3"
+                :label="`commit ${log.commitHash}`"
+                class="text-weight-bold"
+              />
+              <q-badge
+                :color="String(log.deployStatus || '').includes('ERROR') ? 'red-9' : 'emerald-9'"
+                :text-color="String(log.deployStatus || '').includes('ERROR') ? 'red-2' : 'emerald-2'"
+                :label="`🚀 ${log.deployStatus || 'DESPLEGADO'}`"
+                class="text-weight-bold"
+              />
+            </div>
+          </div>
+
+          <!-- Resumen de Métricas Analizadas en esa Corrida -->
+          <div class="row q-col-gutter-sm q-my-sm font-mono">
+            <div class="col-6 col-sm-3">
+              <div class="bg-slate-950 q-pa-sm rounded-borders border-slate">
+                <div class="text-caption text-slate-400">TRADES EVALUADOS</div>
+                <div class="text-h6 text-weight-bolder text-white">{{ log.tradesAnalyzed }}</div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-3">
+              <div class="bg-slate-950 q-pa-sm rounded-borders border-slate">
+                <div class="text-caption text-slate-400">BUENAS vs MALAS</div>
+                <div class="text-h6 text-weight-bolder">
+                  <span class="text-emerald-4">{{ log.winsCount }}W</span>
+                  <span class="text-slate-500 q-px-xs">/</span>
+                  <span class="text-red-4">{{ log.lossesCount }}L</span>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-3">
+              <div class="bg-slate-950 q-pa-sm rounded-borders border-slate">
+                <div class="text-caption text-slate-400">WIN RATE PERÍODO</div>
+                <div class="text-h6 text-weight-bolder" :class="Number(log.winRatePct) >= 50 ? 'text-emerald-4' : 'text-amber-4'">
+                  {{ Number(log.winRatePct || 0).toFixed(1) }}%
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-3">
+              <div class="bg-slate-950 q-pa-sm rounded-borders border-slate">
+                <div class="text-caption text-slate-400">PNL ANALIZADO</div>
+                <div class="text-h6 text-weight-bolder" :class="Number(log.netProfitUsd) >= 0 ? 'text-emerald-4' : 'text-red-4'">
+                  {{ Number(log.netProfitUsd) >= 0 ? '+' : '' }}${{ Number(log.netProfitUsd || 0).toFixed(2) }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Diagnóstico de lo encontrado -->
+          <div class="bg-slate-950 q-pa-sm rounded-borders border-slate q-mb-sm">
+            <div class="text-caption text-weight-bold text-indigo-3 q-mb-xs">
+              🔍 Diagnóstico del Agente (Por qué se ganaron o perdieron las entradas):
+            </div>
+            <div class="text-body2 text-slate-200">
+              {{ log.diagnosis }}
+            </div>
+          </div>
+
+          <!-- Lista de Cambios y Ajustes Realizados -->
+          <div class="bg-slate-950 q-pa-sm rounded-borders border-slate">
+            <div class="text-caption text-weight-bold text-emerald-3 q-mb-xs">
+              🛠️ Ajustes Aplicados por el Agente para Buscar Profit:
+            </div>
+            <ul class="q-my-none q-pl-md text-body2 text-slate-200">
+              <li
+                v-for="(act, aIdx) in parseAgentActions(log.actionsTaken)"
+                :key="aIdx"
+                class="q-mb-xs"
+              >
+                {{ act }}
+              </li>
+            </ul>
+            <div v-if="log.filesModified" class="text-caption text-slate-400 font-mono q-mt-sm">
+              📂 Archivos actualizados: <span class="text-slate-200">{{ log.filesModified }}</span>
+            </div>
+          </div>
+        </q-card>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════════ -->
     <!-- ── PESTAÑA 2: SIMULADOR & BACKTESTING IA ─────────────────────────── -->
     <!-- ══════════════════════════════════════════════════════════════════════ -->
     <div v-else-if="activeTab === 'backtest'">
@@ -1325,6 +1517,12 @@ const byStrategy = ref([]);
 const trades = ref([]);
 const adaptiveStatus = ref({ symbols: [] });
 
+// ── Estado de la Bitácora del Agente Optimizador IA ──
+const agentLogs = ref([]);
+const agentScheduleInfo = ref({});
+const agentLoading = ref(false);
+const agentEvaluating = ref(false);
+
 // ── Estado del Simulador Backtest ──
 const backtestLoading = ref(false);
 const backtestSymbol = ref('ALL');
@@ -1560,8 +1758,70 @@ async function rateTradeItem(row, rating) {
   }
 }
 
+async function fetchAgentLogs() {
+  agentLoading.value = true;
+  try {
+    const res = await tradingService.getAgentLogs(30);
+    if (res && res.ok) {
+      agentLogs.value = res.logs || [];
+      agentScheduleInfo.value = res.scheduleInfo || {};
+    }
+  } catch (err) {
+    console.error('Error cargando bitácora del agente:', err);
+  } finally {
+    agentLoading.value = false;
+  }
+}
+
+async function triggerAgentEvaluationNow() {
+  agentEvaluating.value = true;
+  try {
+    const res = await tradingService.runAgentEvaluationNow();
+    if (res && res.ok) {
+      agentLogs.value = res.logs || [];
+      agentScheduleInfo.value = res.scheduleInfo || agentScheduleInfo.value;
+      $q.notify({
+        type: 'positive',
+        message: 'Diagnóstico del Agente IA ejecutado y registrado en la bitácora.',
+      });
+    }
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: 'Error al ejecutar el diagnóstico del Agente IA.',
+    });
+  } finally {
+    agentEvaluating.value = false;
+  }
+}
+
+function parseAgentActions(actions) {
+  if (Array.isArray(actions)) return actions;
+  if (typeof actions === 'string') {
+    try {
+      const parsed = JSON.parse(actions);
+      return Array.isArray(parsed) ? parsed : [actions];
+    } catch {
+      return [actions];
+    }
+  }
+  return [];
+}
+
+function formatAgentRunDate(dateVal) {
+  if (!dateVal) return '—';
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return String(dateVal);
+  return (
+    d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+    ' ' +
+    d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  );
+}
+
 onMounted(() => {
   fetchReport();
+  fetchAgentLogs();
 });
 </script>
 
