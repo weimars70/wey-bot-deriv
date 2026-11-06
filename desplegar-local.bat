@@ -36,12 +36,18 @@ if %errorlevel% neq 0 (
 cd ..
 
 echo.
-echo [3/4] Sincronizando EA en MetaTrader 5...
+echo [3/4] Sincronizando y compilando EA en MetaTrader 5...
 set "MT5_EXPERTS=C:\Users\Administrator\AppData\Roaming\MetaQuotes\Terminal\BCEF3407BBF131B442A8FC1AD8407C61\MQL5\Experts"
+set "METAEDITOR=C:\Program Files\Deriv SVG MT5 Terminal\metaeditor64.exe"
 if exist "%MT5_EXPERTS%" (
     copy /y "DerivApp_Bridge_EA.ex5" "%MT5_EXPERTS%\" >nul 2>nul
     copy /y "DerivApp_Bridge_EA.mq5" "%MT5_EXPERTS%\" >nul 2>nul
-    echo      Archivos de EA actualizados en MT5.
+    if exist "%METAEDITOR%" (
+        "%METAEDITOR%" /compile:"%MT5_EXPERTS%\DerivApp_Bridge_EA.mq5" /log >nul 2>nul
+        echo      DerivApp_Bridge_EA.mq5 compilado a .ex5 y sincronizado en MT5.
+    ) else (
+        echo      Archivos de EA actualizados en MT5.
+    )
 )
 
 echo.
