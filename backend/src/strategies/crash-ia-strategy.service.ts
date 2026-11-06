@@ -158,6 +158,7 @@ export interface SpikeRadarEntry {
   score:               number;
   canSell:             boolean;
   canBuy:              boolean;
+  sweepPrice?:         number;  // Extremo de la mecha que barrió la liquidez del OB (base del SL)
 }
 
 @Injectable()
@@ -639,6 +640,12 @@ export class CrashIaStrategyService {
       // 6. Viabilidad M5 confirmada (rechazo o desaceleración en zona institucional)
       if (!ev.m5Viability?.isViable) continue;
 
+      // 6.1 CAZADA DE LIQUIDEZ CONFIRMADA (evitar la entrada "obvia" del primer toque al OB).
+      // Exige que una vela M5 reciente haya perforado el extremo del OB (sacando los SL retail)
+      // y que la última vela cerrada haya vuelto a cerrar dentro del OB (rechazo).
+      const sweep = this.detectLiquiditySweep(ev.chartCandles, ob, isBoom);
+      if (!sweep) continue;
+
       // 7. Cálculo riguroso de Score Institucional Sniper (máx 100)
       let score = 50;
       if (ev.filters.trendOk) score += 15;
@@ -653,10 +660,13 @@ export class CrashIaStrategyService {
       // "menos señales y tratar de coger una tendencia"
       if (score < 80) continue;
 
-      const entryPrice = ob.mid50 || ev.entryLevel50;
+      // Entrada al precio real (tras el rechazo) y SL justo detrás de la mecha de la cazada:
+      // SL estructural más ajustado que el anterior (OB + 0.4 velas), alineado con el riesgo en USD.
+      const entryPrice = ev.currentPrice;
+      const slBuffer = ev.m5CandleHeight * 0.25;
       const stopLossPrice = isBoom
-        ? Math.min(ob.low - ev.m5CandleHeight * 0.4, ev.currentPrice - ev.m5CandleHeight * 0.4)
-        : Math.max(ob.high + ev.m5CandleHeight * 0.4, ev.currentPrice + ev.m5CandleHeight * 0.4);
+        ? Math.min(sweep.sweepPrice - slBuffer, ev.currentPrice - slBuffer)
+        : Math.max(sweep.sweepPrice + slBuffer, ev.currentPrice + slBuffer);
 
       const actualRisk = Math.max(Math.abs(entryPrice - stopLossPrice), ev.m5CandleHeight * 0.5);
       const takeProfitPrice = isBoom
@@ -686,10 +696,48 @@ export class CrashIaStrategyService {
         score:          Math.min(100, score),
         canSell:        !isBoom,
         canBuy:         isBoom,
+        sweepPrice:     parseFloat(sweep.sweepPrice.toFixed(3)),
       });
     }
 
     return radar.sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Detecta una cazada de liquidez (liquidity sweep) sobre el Order Block en M5:
+   *  - CRASH (SELL): una de las últimas velas cerradas tuvo high > ob.high y la última vela cerrada
+   *    cerró de nuevo por debajo de ob.high (rechazo). El precio actual sigue por debajo del barrido.
+   *  - BOOM (BUY): espejo con ob.low.
+   * Retorna el extremo del barrido (para colocar el SL detrás) o null si no hay confirmación.
+   */
+  private detectLiquiditySweep(
+    candles: { open: number; high: number; low: number; close: number }[],
+    ob: OrderBlockPoint,
+    isBoom: boolean,
+    lookback = 6,
+  ): { sweepPrice: number } | null {
+    if (!candles || candles.length < 3) return null;
+    // La última vela es la que se está formando: solo usar velas cerradas
+    const closed = candles.slice(0, -1);
+    const lastClosed = closed[closed.length - 1];
+    const current = candles[candles.length - 1];
+    const window = closed.slice(-lookback);
+
+    if (!isBoom) {
+      const pierced = window.filter((c) => c.high > ob.high);
+      if (!pierced.length) return null;
+      const sweepPrice = Math.max(...pierced.map((c) => c.high));
+      const rejected = lastClosed.close < ob.high && lastClosed.close <= lastClosed.open;
+      if (!rejected || current.close >= sweepPrice) return null;
+      return { sweepPrice };
+    }
+
+    const pierced = window.filter((c) => c.low < ob.low);
+    if (!pierced.length) return null;
+    const sweepPrice = Math.min(...pierced.map((c) => c.low));
+    const rejected = lastClosed.close > ob.low && lastClosed.close >= lastClosed.open;
+    if (!rejected || current.close <= sweepPrice) return null;
+    return { sweepPrice };
   }
 
   /**

@@ -2206,15 +2206,45 @@ export class TradingBotService implements OnModuleInit {
         }
       }
 
-      const lot = (params as any).lot || this.getDefaultLotForSymbol(params.symbol);
+      let lot = (params as any).lot || this.getDefaultLotForSymbol(params.symbol);
       const maxLossUsd = this.getMaxSlUsd(params.symbol);
-      const slDistPoints = Number((maxLossUsd / lot).toFixed(3));
 
       // Usar precio real de tick más reciente si está disponible para evitar desfases con velas antiguas
       const livePrice = this.lastTickPrice.get(params.symbol);
       if (livePrice && livePrice > 0) {
         params.entryPrice = livePrice;
       }
+
+      // ── ALINEAR SL TÉCNICO CON EL SL MONETARIO ──
+      // Si la distancia al SL técnico × lote supera el máximo en USD, el SL monetario cerraría el trade
+      // ANTES de que el precio llegue al SL técnico. En ese caso se reduce el lote para que el SL técnico
+      // quepa dentro del riesgo máximo; si ni con el lote mínimo cabe, la entrada se descarta.
+      if (
+        params.strategy !== 'MANUAL_APP' &&
+        this.getAssetCategory(params.symbol) === 'CRASH_BOOM' &&
+        params.stopLossPrice && params.stopLossPrice > 0 && params.entryPrice > 0
+      ) {
+        const riskPts = Math.abs(params.entryPrice - params.stopLossPrice);
+        const riskUsd = riskPts * lot;
+        if (riskUsd > maxLossUsd) {
+          const minLot = this.getMinLotForSymbol(params.symbol);
+          const adjustedLot = Math.floor((maxLossUsd / riskPts) * 100) / 100;
+          if (adjustedLot < minLot) {
+            this.logger.warn(
+              `🚫 [SL TÉCNICO DEMASIADO AMPLIO] ${params.symbol} (${params.strategy}): SL a ${riskPts.toFixed(2)} pts ` +
+              `= $${(riskPts * minLot).toFixed(2)} USD aun con lote mínimo ${minLot} (máx $${maxLossUsd}). Entrada descartada.`,
+            );
+            return null;
+          }
+          this.logger.log(
+            `⚖️ [LOTE AJUSTADO AL RIESGO] ${params.symbol} (${params.strategy}): SL técnico a ${riskPts.toFixed(2)} pts ` +
+            `($${riskUsd.toFixed(2)} con lote ${lot}). Lote reducido a ${adjustedLot} para no superar $${maxLossUsd} USD.`,
+          );
+          lot = adjustedLot;
+        }
+      }
+
+      const slDistPoints = Number((maxLossUsd / lot).toFixed(3));
 
       // Guardar SL virtual de referencia en la BD (NUNCA se envía a MT5 porque el usuario pidió no marcar SL ni TP)
       if (!params.stopLossPrice) {
@@ -3140,6 +3170,18 @@ export class TradingBotService implements OnModuleInit {
     }
 
     return 1.00;
+  }
+
+  /**
+   * Lote mínimo permitido por el broker (Deriv MT5) para índices Crash/Boom.
+   * Usado al reducir el lote para que el SL técnico quepa dentro del SL monetario.
+   * NOTA: verificar contra la especificación del símbolo en MT5 (Volumen mínimo).
+   */
+  getMinLotForSymbol(sym: string): number {
+    const s = (sym || '').toUpperCase().replace(/\s+/g, '');
+    if (s.includes('CRASH300') || s.includes('C300')) return 0.5;
+    if (s.includes('BOOM300') || s.includes('B300')) return 1.0;
+    return 0.2;
   }
 
   getMinProfitPointsForProtection(sym: string): number {
