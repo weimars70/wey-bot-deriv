@@ -382,6 +382,8 @@ export class TradingStatsService {
             pnlUsd: p,
             pnlPoints: t.pnlPoints,
             result: res,
+            userRating: t.userRating || null,
+            userNotes: t.userNotes || null,
             scorePct: t.scorePct != null ? Number(t.scorePct) : null,
             lotSize: t.lot,
             ticket: t.mt5Ticket,
@@ -498,9 +500,31 @@ export class TradingStatsService {
         exitTimeFormatted: t.exitTime ? new Date(Number(t.exitTime) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—',
         exitReason: t.exitReason || '—',
         session: t.session || this.getSessionFromHour(t.hourOfDay),
+        userRating: t.userRating || null,
+        userNotes: t.userNotes || null,
       })),
       adaptiveStatus: await this.getAdaptiveStatus(),
     };
+  }
+
+  /**
+   * Permite marcar manualmente un trade como BUENO ('GOOD') o MALO ('BAD') en la BD
+   * para alimentar la evaluación del agente y el filtro adaptativo.
+   */
+  async rateTrade(id: string, rating: 'GOOD' | 'BAD' | null, notes?: string) {
+    const trade = await this.tradeRepo.findOne({ where: { id } });
+    if (!trade) {
+      return { ok: false, message: 'Trade no encontrado' };
+    }
+    trade.userRating = rating;
+    if (notes !== undefined) {
+      trade.userNotes = notes;
+    }
+    await this.tradeRepo.save(trade);
+    this.logger.log(
+      `📝 [CALIFICACIÓN TRADE] ${trade.symbol} (${trade.strategy}) ID=${id} marcado como ${rating || 'SIN_CALIFICAR'}${notes ? ` (${notes})` : ''}`,
+    );
+    return { ok: true, trade };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -564,21 +588,30 @@ export class TradingStatsService {
         status: 'CLOSED',
       },
       order: { exitTime: 'DESC' },
-      take: 5,
+      take: 15,
     });
 
     let consecutiveLosses = 0;
     let lastLossTimeMs = 0;
 
     for (const t of recentTrades) {
+      if (
+        t.exitReason === 'MT5_TIMEOUT_NO_FILL' ||
+        t.exitReason === 'ORPHAN_STARTUP_CLEANED' ||
+        String(t.exitReason || '').startsWith('MT5_REJECTED') ||
+        String(t.exitReason || '').startsWith('MT5_ERROR')
+      ) {
+        continue;
+      }
       const pnl = Number(t.pnlUsd || t.pnlPoints || 0);
-      if (pnl < -0.05) {
+      const isLoss = t.userRating === 'BAD' || (t.userRating !== 'GOOD' && pnl < -0.05);
+      if (isLoss) {
         consecutiveLosses++;
         if (lastLossTimeMs === 0 && t.exitTime) {
           lastLossTimeMs = Number(t.exitTime) * 1000;
         }
       } else {
-        break; // Racha rota por una victoria o breakeven
+        break; // Racha rota por una victoria o breakeven real
       }
     }
 
@@ -616,12 +649,20 @@ export class TradingStatsService {
     let wins = 0;
     let losses = 0;
     for (const t of trades) {
+      if (
+        t.exitReason === 'MT5_TIMEOUT_NO_FILL' ||
+        t.exitReason === 'ORPHAN_STARTUP_CLEANED' ||
+        String(t.exitReason || '').startsWith('MT5_REJECTED') ||
+        String(t.exitReason || '').startsWith('MT5_ERROR')
+      ) {
+        continue;
+      }
       const pnl = Number(t.pnlUsd || t.pnlPoints || 0);
-      if (pnl > 0.05) wins++;
-      else if (pnl < -0.05) losses++;
+      if (t.userRating === 'GOOD' || (t.userRating !== 'BAD' && pnl > 0.05)) wins++;
+      else if (t.userRating === 'BAD' || pnl < -0.05) losses++;
     }
 
-    const total = trades.length;
+    const total = wins + losses;
     const winRatePct = total > 0 ? (wins / total) * 100 : 0;
     return { total, wins, losses, winRatePct };
   }
@@ -645,12 +686,20 @@ export class TradingStatsService {
     let wins = 0;
     let losses = 0;
     for (const t of trades) {
+      if (
+        t.exitReason === 'MT5_TIMEOUT_NO_FILL' ||
+        t.exitReason === 'ORPHAN_STARTUP_CLEANED' ||
+        String(t.exitReason || '').startsWith('MT5_REJECTED') ||
+        String(t.exitReason || '').startsWith('MT5_ERROR')
+      ) {
+        continue;
+      }
       const pnl = Number(t.pnlUsd || t.pnlPoints || 0);
-      if (pnl > 0.05) wins++;
-      else if (pnl < -0.05) losses++;
+      if (t.userRating === 'GOOD' || (t.userRating !== 'BAD' && pnl > 0.05)) wins++;
+      else if (t.userRating === 'BAD' || pnl < -0.05) losses++;
     }
 
-    const total = trades.length;
+    const total = wins + losses;
     const winRatePct = total > 0 ? (wins / total) * 100 : 0;
     return { total, wins, losses, winRatePct };
   }

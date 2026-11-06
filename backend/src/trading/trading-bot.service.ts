@@ -831,8 +831,14 @@ export class TradingBotService implements OnModuleInit {
           continue;
         }
 
-        // 1.2 STOP LOSS TÉCNICO VIRTUAL: Cierra si el precio traspasa el SL de zona/Order Block
-        if (trade.stopLossPrice && trade.stopLossPrice > 0 && currentPrice > 0) {
+        // 1.2 STOP LOSS TÉCNICO VIRTUAL: En Crash/Boom se respeta el margen completo del SL monetario (-$5/-$8 USD)
+        // para evitar cierres prematuros (-$1.70, -$2.70, -$3.36) cuando el Order Block es muy estrecho.
+        if (
+          trade.stopLossPrice &&
+          trade.stopLossPrice > 0 &&
+          currentPrice > 0 &&
+          currentPnlUsd <= -maxLossUsd
+        ) {
           const slHit =
             trade.direction === 'BUY'
               ? currentPrice <= trade.stopLossPrice
@@ -2194,11 +2200,10 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── RETROALIMENTACIÓN ADAPTATIVA IA (FILTRO HORARIO Y CIRCUIT BREAKER) ──
-      // H1_NO_WICK y las señales directas del Dashboard no deben quedar bloqueadas por el filtro adaptativo antiguo.
+      // Aplica también a SPIKE_RADAR y EA_WEY_SMC para que el Circuit Breaker (2 SL seguidos) y el filtro horario protejan el capital.
       if (
         params.strategy !== 'MANUAL_APP' &&
-        params.strategy !== 'H1_NO_WICK' &&
-        !isDashboardValidatedStrategy
+        params.strategy !== 'H1_NO_WICK'
       ) {
         const adaptiveCheck = await this.statsService.canTradeAdaptive(params.symbol, params.strategy);
         if (!adaptiveCheck.allowed) {

@@ -698,12 +698,36 @@
         >
           <template #body-cell-result="props">
             <q-td :props="props">
-              <q-badge
-                :color="props.row.result === 'WIN' ? 'emerald-9' : props.row.result === 'LOSS' ? 'red-9' : 'slate-700'"
-                :text-color="props.row.result === 'WIN' ? 'emerald-2' : props.row.result === 'LOSS' ? 'red-2' : 'white'"
-                :label="props.row.result === 'WIN' ? '🟢 BUENA (WIN)' : props.row.result === 'LOSS' ? '🔴 MALA (SL)' : '⚪ BREAKEVEN'"
-                class="text-weight-bold"
-              />
+              <div class="row items-center justify-center no-wrap q-gutter-xs">
+                <q-badge
+                  :color="props.row.result === 'WIN' ? 'emerald-9' : props.row.result === 'LOSS' ? 'red-9' : 'slate-700'"
+                  :text-color="props.row.result === 'WIN' ? 'emerald-2' : props.row.result === 'LOSS' ? 'red-2' : 'white'"
+                  :label="props.row.result === 'WIN' ? '🟢 BUENA (WIN)' : props.row.result === 'LOSS' ? '🔴 MALA (SL)' : '⚪ BREAKEVEN'"
+                  class="text-weight-bold"
+                />
+                <q-btn
+                  dense
+                  flat
+                  round
+                  size="xs"
+                  icon="thumb_up"
+                  :color="props.row.userRating === 'GOOD' ? 'emerald-4' : 'slate-600'"
+                  @click="rateTradeItem(props.row, props.row.userRating === 'GOOD' ? null : 'GOOD')"
+                >
+                  <q-tooltip>Marcar entrada como BUENA para el agente IA</q-tooltip>
+                </q-btn>
+                <q-btn
+                  dense
+                  flat
+                  round
+                  size="xs"
+                  icon="thumb_down"
+                  :color="props.row.userRating === 'BAD' ? 'red-4' : 'slate-600'"
+                  @click="rateTradeItem(props.row, props.row.userRating === 'BAD' ? null : 'BAD')"
+                >
+                  <q-tooltip>Marcar entrada como MALA para el agente IA</q-tooltip>
+                </q-btn>
+              </div>
             </q-td>
           </template>
 
@@ -1514,6 +1538,26 @@ function formatExitReason(reason) {
   if (reason.includes('TIMEOUT')) return '⏱️ Timeout tiempo límite';
   if (reason.includes('MT5')) return '📊 Sincronizado MT5';
   return reason;
+}
+
+async function rateTradeItem(row, rating) {
+  try {
+    const res = await tradingService.rateTrade(row.id, rating);
+    if (res && res.ok) {
+      row.userRating = rating;
+      $q.notify({
+        type: rating === 'GOOD' ? 'positive' : rating === 'BAD' ? 'warning' : 'info',
+        message: rating
+          ? `Operación ${row.symbol} marcada como ${rating === 'GOOD' ? 'BUENA 👍' : 'MALA 👎'} para el agente IA`
+          : `Calificación manual eliminada en ${row.symbol}`,
+      });
+    }
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: 'No se pudo guardar la calificación de la operación.',
+    });
+  }
 }
 
 onMounted(() => {

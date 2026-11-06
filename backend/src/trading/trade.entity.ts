@@ -113,6 +113,12 @@ export class TradeRecord {
   @Column('varchar', { length: 15, nullable: true })
   result: 'WIN' | 'LOSS' | 'BREAKEVEN' | null;
 
+  @Column('varchar', { length: 15, nullable: true })
+  userRating: 'GOOD' | 'BAD' | null;
+
+  @Column('varchar', { length: 255, nullable: true })
+  userNotes: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

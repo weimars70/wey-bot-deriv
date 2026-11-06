@@ -95,6 +95,15 @@ export class TradingBotController {
     return this.tradingService.closeTrade(id, 'MANUAL_USER_CLOSE');
   }
 
+  @Post('rate/:id')
+  rateTrade(
+    @Param('id') id: string,
+    @Body('rating') rating: 'GOOD' | 'BAD' | null,
+    @Body('notes') notes?: string,
+  ) {
+    return this.statsService.rateTrade(id, rating, notes);
+  }
+
   @Post('reset-counts')
   resetCounts(@Body('symbol') symbol?: string) {
     return this.tradingService.resetSymbolTradesCount(symbol);

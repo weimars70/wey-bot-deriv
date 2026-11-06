@@ -21,6 +21,10 @@ export const tradingService = {
     return api.post(`/trading/close/${id}`).then((r) => r.data);
   },
 
+  rateTrade(id, rating, notes) {
+    return api.post(`/trading/rate/${id}`, { rating, notes }).then((r) => r.data);
+  },
+
   resetCounts(symbol) {
     return api.post('/trading/reset-counts', { symbol }).then((r) => r.data);
   },
