@@ -158,8 +158,9 @@ export class TradingBotService implements OnModuleInit {
         where: { status: 'OPEN' },
       });
       for (const t of openTrades) {
-        // Descartar órdenes fantasma sin ticket de sesiones previas para evitar falsos timeouts
-        if (!t.mt5Ticket && (Date.now() / 1000 - Number(t.entryTime || 0)) > 45) {
+        // Descartar órdenes fantasma sin ticket de sesiones previas o símbolos que no sean Crash/Boom
+        const isNotCrashBoom = t.strategy !== 'MANUAL_APP' && !this.isAllowedCrashBoomSymbol(t.symbol);
+        if (isNotCrashBoom || (!t.mt5Ticket && (Date.now() / 1000 - Number(t.entryTime || 0)) > 45)) {
           this.tradeRepo.update(t.id, { status: 'CLOSED', exitReason: 'ORPHAN_STARTUP_CLEANED' }).catch(() => {});
           continue;
         }
@@ -2588,14 +2589,30 @@ export class TradingBotService implements OnModuleInit {
           `🎯 [MT5 BRIDGE] ¡Operación confirmada en MetaTrader 5! Ticket #${fb.ticket} para ${trade.symbol}`,
         );
       }
-    } else if (fb && fb.status === 'ERROR') {
+    } else if (fb && (fb.status === 'ERROR' || String(fb.status || '').startsWith('REJECTED'))) {
       // eslint-disable-next-line no-console
       console.error(
-        `\n❌ [MT5 ERROR] MetaTrader 5 rechazó o falló al ejecutar comando (${fb.cmdId || ''}): ${fb.msg || 'Error desconocido'}\n`,
+        `\n❌ [MT5 ${fb.status}] MetaTrader 5 rechazó o falló al ejecutar comando (${fb.cmdId || ''}): ${fb.msg || 'Error desconocido'}\n`,
       );
       this.logger.error(
-        `❌ [MT5 BRIDGE ERROR] Falló comando ${fb.cmdId || ''} (tradeId=${fb.tradeId || ''}): ${fb.msg || ''}`,
+        `❌ [MT5 BRIDGE ${fb.status}] Falló comando ${fb.cmdId || ''} (tradeId=${fb.tradeId || ''}): ${fb.msg || ''}`,
       );
+      if (fb.tradeId && this.activeTradesMap.has(fb.tradeId)) {
+        const rejectedTrade = this.activeTradesMap.get(fb.tradeId);
+        if (rejectedTrade && !rejectedTrade.mt5Ticket) {
+          this.activeTradesMap.delete(fb.tradeId);
+          await this.tradeRepo
+            .update(fb.tradeId, {
+              status: 'CLOSED',
+              exitReason: `MT5_${fb.status}`,
+              pnlUsd: 0,
+              pnlPoints: 0,
+              pnlPercent: 0,
+              result: 'BREAKEVEN',
+            })
+            .catch(() => {});
+        }
+      }
     }
   }
 
@@ -2616,6 +2633,14 @@ export class TradingBotService implements OnModuleInit {
   }
 
   private async sendMt5Command(cmd: any) {
+    // ── CANDADO ESTRICTO: Nunca enviar aperturas automáticas que no sean Crash o Boom ──
+    if (cmd.action === 'OPEN' && cmd.comment !== 'MANUAL_APP' && !this.isAllowedCrashBoomSymbol(cmd.symbol || '')) {
+      this.logger.warn(
+        `⛔ [MT5 BLOQUEADO SOLO CRASH/BOOM] Comando OPEN descartado para símbolo no permitido: ${cmd.symbol || ''}.`,
+      );
+      return;
+    }
+
     // ── REGLA: Solo enviar aperturas automáticas a MT5 si el usuario autorizado (weimarsuber@gmail.com) está conectado ──
     if (cmd.action === 'OPEN' && cmd.comment !== 'MANUAL_APP') {
       const userOnline = await this.isUserAuthorizedOnline();
