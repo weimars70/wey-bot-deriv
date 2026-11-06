@@ -152,8 +152,14 @@ export class TradingBotService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    // Cargar trades abiertos previos si los hubiera
+    // Asegurar columnas de calificación manual en BD y cargar trades abiertos previos
     try {
+      await this.tradeRepo
+        .query(
+          `ALTER TABLE trades ADD COLUMN IF NOT EXISTS "userRating" varchar(15); ALTER TABLE trades ADD COLUMN IF NOT EXISTS "userNotes" varchar(255);`,
+        )
+        .catch(() => {});
+
       const openTrades = await this.tradeRepo.find({
         where: { status: 'OPEN' },
       });

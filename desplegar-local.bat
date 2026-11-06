@@ -46,6 +46,8 @@ if exist "%MT5_EXPERTS%" (
 
 echo.
 echo [4/4] Reiniciando servicio en PM2...
+call pm2 stop bot-indices 2>nul
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 3039 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { if ($_.OwningProcess -gt 4) { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } }"
 call pm2 restart bot-indices 2>nul || call pm2 start ecosystem.config.cjs
 call pm2 save
 
