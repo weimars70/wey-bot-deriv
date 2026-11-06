@@ -3,7 +3,7 @@
     <q-header elevated class="bg-primary text-white">
       <q-toolbar>
         <q-btn flat dense round icon="menu" @click="drawer = !drawer" />
-        <q-toolbar-title>Deriv Data Dashboard</q-toolbar-title>
+        <q-toolbar-title class="text-subtitle1 text-weight-bold ellipsis">Deriv Data Dashboard</q-toolbar-title>
 
         <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
         <!-- â”€â”€ CAMPANITA DE NOTIFICACIONES, SONIDO Y VOZ ALTO VOLUMEN â”€â”€â”€â”€â”€â”€ -->
@@ -184,7 +184,7 @@
         <q-btn flat dense round icon="tune" color="amber-4" class="q-mr-sm" @click="openPrefsDialog">
           <q-tooltip>Parametrizar mis estrategias</q-tooltip>
         </q-btn>
-        <div class="text-caption q-mr-md font-mono">{{ authStore.user?.email }}</div>
+        <div class="text-caption q-mr-md font-mono gt-xs">{{ authStore.user?.email }}</div>
         <q-btn flat dense round icon="logout" @click="onLogout">
           <q-tooltip>Cerrar sesiÃ³n</q-tooltip>
         </q-btn>

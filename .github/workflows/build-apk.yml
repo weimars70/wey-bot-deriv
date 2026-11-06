@@ -56,8 +56,11 @@ jobs:
           cd frontend
           node generate-icons.mjs || echo "Iconos pregenerados ya presentes en res/mipmap"
 
-      - name: Dar permisos de ejecución a gradlew
-        run: chmod +x frontend/src-capacitor/android/gradlew
+      - name: Asegurar versión de Gradle 8.5 compatible con Android Gradle Plugin 8.2.1
+        run: |
+          sed -i 's/gradle-[0-9.]*-bin\.zip/gradle-8.5-bin.zip/g' frontend/src-capacitor/android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/gradle-[0-9.]*-all\.zip/gradle-8.5-bin.zip/g' frontend/src-capacitor/android/gradle/wrapper/gradle-wrapper.properties
+          chmod +x frontend/src-capacitor/android/gradlew
 
       - name: Asegurar Keystore permanente para firma oficial de Release
         run: |

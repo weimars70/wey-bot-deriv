@@ -14,21 +14,23 @@
         </div>
       </div>
 
-      <!-- Selector de Pestañas -->
+      <!-- Selector de Pestañas Responsive -->
       <q-tabs
         v-model="activeTab"
         dense
         no-caps
-        class="bg-slate-900 text-slate-400 rounded-borders border-slate"
+        mobile-arrows
+        outside-arrows
+        class="bg-slate-900 text-slate-400 rounded-borders border-slate col-12 col-md-auto"
         active-color="indigo-3"
         active-bg-color="indigo-10"
         indicator-color="indigo-5"
       >
-        <q-tab name="live" icon="analytics" label="Informe Diario en Vivo" class="text-weight-bold q-px-md" />
-        <q-tab name="agent" icon="smart_toy" label="Bitácora del Agente IA" class="text-weight-bold q-px-md">
+        <q-tab name="live" icon="analytics" label="Informe Diario en Vivo" class="text-weight-bold q-px-sm q-px-md-md" />
+        <q-tab name="agent" icon="smart_toy" label="Bitácora del Agente IA" class="text-weight-bold q-px-sm q-px-md-md">
           <q-badge v-if="agentLogs.length > 0" color="emerald-8" text-color="white" :label="agentLogs.length" class="q-ml-xs" />
         </q-tab>
-        <q-tab name="backtest" icon="biotech" label="Simulador & Backtesting IA" class="text-weight-bold q-px-md" />
+        <q-tab name="backtest" icon="biotech" label="Simulador & Backtesting IA" class="text-weight-bold q-px-sm q-px-md-md" />
       </q-tabs>
     </div>
 
@@ -799,14 +801,14 @@
             </div>
           </div>
 
-          <div class="row items-center q-gutter-sm">
+          <div class="row items-center flex-wrap q-gutter-sm col-12 col-md-auto">
             <q-btn
               outline
               color="indigo-4"
               icon="refresh"
               label="Actualizar Bitácora"
               no-caps
-              class="text-weight-bold"
+              class="text-weight-bold col-12 col-sm-auto"
               :loading="agentLoading"
               @click="fetchAgentLogs"
             />
@@ -816,7 +818,7 @@
               icon="biotech"
               label="Backtest 30 Días (10 Índices) + Optimizar"
               no-caps
-              class="text-weight-bold"
+              class="text-weight-bold col-12 col-sm-auto"
               :loading="agentBacktesting"
               @click="triggerAgentBacktestOptimize"
             >
@@ -828,7 +830,7 @@
               icon="bolt"
               label="Ejecutar Diagnóstico IA Ahora"
               no-caps
-              class="text-weight-bold"
+              class="text-weight-bold col-12 col-sm-auto"
               :loading="agentEvaluating"
               @click="triggerAgentEvaluationNow"
             >
