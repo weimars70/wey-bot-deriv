@@ -615,25 +615,31 @@ export class TradingBotService implements OnModuleInit {
       const isBoom = (sym || '').toUpperCase().includes('BOOM');
       const isFavorableSpikeDirection = isBoom ? currentPrice > prevPrice : currentPrice < prevPrice;
 
-      if (delta >= spikeThreshold || delta >= 3.5) {
+      if (delta >= spikeThreshold || delta >= 2.5) {
         const prevSpikeAt = this.lastSpikeAt.get(sym) || 0;
         const now = Date.now();
         this.lastSpikeAt.set(sym, now);
 
         // ── Tracking de origen, extremo y retroceso 50% para Crash/Boom ──
+        // Si ya había un spike previo NO resuelto (sin recuperar el 50%), conservar el originPrice original
+        // para que un 2do o 3er spike consecutivo en cascada NO baje artificialmente el 50% requerido.
         if (isCb && isFavorableSpikeDirection) {
           const existingSpike = this.lastSpikeDetails.get(sym);
-          if (existingSpike && !existingSpike.resolved && (now - existingSpike.timestamp < 8_000)) {
-            // Continuación del mismo spike en ticks consecutivos
-            if (!isBoom && currentPrice < existingSpike.extremePrice) {
-              existingSpike.extremePrice = currentPrice;
-              existingSpike.midpoint = Number(((existingSpike.originPrice + existingSpike.extremePrice) / 2).toFixed(3));
-              existingSpike.delta = Math.abs(existingSpike.originPrice - existingSpike.extremePrice);
-            } else if (isBoom && currentPrice > existingSpike.extremePrice) {
-              existingSpike.extremePrice = currentPrice;
-              existingSpike.midpoint = Number(((existingSpike.originPrice + existingSpike.extremePrice) / 2).toFixed(3));
-              existingSpike.delta = Math.abs(existingSpike.originPrice - existingSpike.extremePrice);
-            }
+          if (existingSpike && !existingSpike.resolved && (now - existingSpike.timestamp < 30 * 60 * 1000)) {
+            const trueOrigin = !isBoom
+              ? Math.max(existingSpike.originPrice, prevPrice)
+              : Math.min(existingSpike.originPrice, prevPrice);
+            const trueExtreme = !isBoom
+              ? Math.min(existingSpike.extremePrice, currentPrice)
+              : Math.max(existingSpike.extremePrice, currentPrice);
+            existingSpike.originPrice = trueOrigin;
+            existingSpike.extremePrice = trueExtreme;
+            existingSpike.midpoint = Number(((trueOrigin + trueExtreme) / 2).toFixed(3));
+            existingSpike.delta = Math.abs(trueOrigin - trueExtreme);
+            existingSpike.timestamp = now;
+            this.logger.log(
+              `⚡ [SPIKE EN CASCADA DETECTADO] ${sym} (${isBoom ? 'BOOM BUY' : 'CRASH SELL'}): delta acumulado ${existingSpike.delta.toFixed(3)} pts (Origen conservado: ${trueOrigin.toFixed(3)}, Nuevo Extremo: ${trueExtreme.toFixed(3)}, Mitad 50%: ${existingSpike.midpoint.toFixed(3)}). Prohibido entrar hasta recuperar el 50%.`,
+            );
           } else {
             const originPrice = prevPrice;
             const extremePrice = currentPrice;
@@ -1517,13 +1523,26 @@ export class TradingBotService implements OnModuleInit {
           continue;
         }
 
-        // Candado Sniper SMC: El precio debe haber alcanzado efectivamente el Order Block
+        // Candado Sniper SMC: El precio EN VIVO debe estar efectivamente dentro del Order Block (sin haber dado spike ya)
+        const liveSmcPrice = this.lastTickPrice.get(sig.symbol) || sig.currentPrice;
+        if (sig.direction === 'SELL' && sig.currentPrice - liveSmcPrice >= 1.5) {
+          this.logger.warn(
+            `⛔ [EA_WEY_SMC POST-SPIKE BLOQUEADO] ${sig.symbol}: Precio en vivo (${liveSmcPrice}) ya cayó ${(sig.currentPrice - liveSmcPrice).toFixed(2)} pts respecto a la vela (${sig.currentPrice}). Spike ya ocurrió.`,
+          );
+          continue;
+        }
+        if (sig.direction === 'BUY' && liveSmcPrice - sig.currentPrice >= 1.5) {
+          this.logger.warn(
+            `⛔ [EA_WEY_SMC POST-SPIKE BLOQUEADO] ${sig.symbol}: Precio en vivo (${liveSmcPrice}) ya subió ${(liveSmcPrice - sig.currentPrice).toFixed(2)} pts respecto a la vela (${sig.currentPrice}). Spike ya ocurrió.`,
+          );
+          continue;
+        }
         if (sig.chart?.smcZones?.length) {
           const zone = sig.chart.smcZones[0];
-          if (sig.direction === 'SELL' && sig.currentPrice < zone.bottom) {
+          if (sig.direction === 'SELL' && liveSmcPrice < zone.bottom) {
             continue;
           }
-          if (sig.direction === 'BUY' && sig.currentPrice > zone.top) {
+          if (sig.direction === 'BUY' && liveSmcPrice > zone.top) {
             continue;
           }
         }
@@ -1539,7 +1558,7 @@ export class TradingBotService implements OnModuleInit {
           symbol: sig.symbol,
           mercado: sig.name || sig.symbol,
           direction: sig.direction,
-          entryPrice: sig.currentPrice,
+          entryPrice: liveSmcPrice,
           stopLossPrice: sig.stopLossPrice || null,
           takeProfitPrice: null, // Sin TP fijo para permitir continuidad en Crash/Boom
           isHighlyViable,
@@ -2291,63 +2310,144 @@ export class TradingBotService implements OnModuleInit {
         }
       }
 
-      // ── REGLA USUARIO 1: NO HACER TRADE INMEDIATAMENTE TRAS UN SPIKE (ESPERAR AL MENOS AL 50% DE RETROCESO) ──
-      // Si es una re-entrada en la misma hora o una entrada de Gap (que ya validó tendencia M15 + retroceso M1 + 2 min antes), permitir directamente.
-      if (this.getAssetCategory(params.symbol) === 'CRASH_BOOM' && !isSameHourZoneReentry && !isWatchedGapTrade) {
+      // ── USAR PRECIO REAL DE TICK EN VIVO DESDE EL INICIO (EVITA PRECIOS DESFASADOS DE VELAS EN CACHÉ) ──
+      const signalEntryPrice = Number(params.entryPrice) || 0;
+      const livePrice = this.lastTickPrice.get(params.symbol);
+      if (livePrice && livePrice > 0) {
+        const isBoomSym = (params.symbol || '').toUpperCase().includes('BOOM');
+        if (!isBoomSym && signalEntryPrice > 0 && signalEntryPrice - livePrice >= 1.5) {
+          this.logger.warn(
+            `⛔ [BLOQUEO SPIKE EN CURSO] ${params.symbol} (${params.strategy}): Precio en vivo (${livePrice.toFixed(3)}) ya cayó ${(signalEntryPrice - livePrice).toFixed(2)} pts respecto al precio de señal (${signalEntryPrice.toFixed(3)}). Prohibido entrar después de un spike.`,
+          );
+          return null;
+        }
+        if (isBoomSym && signalEntryPrice > 0 && livePrice - signalEntryPrice >= 1.5) {
+          this.logger.warn(
+            `⛔ [BLOQUEO SPIKE EN CURSO] ${params.symbol} (${params.strategy}): Precio en vivo (${livePrice.toFixed(3)}) ya subió ${(livePrice - signalEntryPrice).toFixed(2)} pts respecto al precio de señal (${signalEntryPrice.toFixed(3)}). Prohibido entrar después de un spike.`,
+          );
+          return null;
+        }
+        params.entryPrice = livePrice;
+      }
+
+      // ── REGLA CRÍTICA USUARIO: PROHIBIDO HACER ENTRADAS JUSTO DESPUÉS DE UN SPIKE (SIN EXCEPCIONES) ──
+      // Aplica a TODAS las estrategias automáticas en Crash y Boom:
+      // 1) Cooldown mínimo de 3 minutos (180s) tras cualquier spike detectado en tiempo real.
+      // 2) Exigir al menos 50% de retroceso del spike o cascada de spikes (tanto en memoria de ticks como en las últimas 15 velas M1).
+      // 3) Exigir mínimo 3 velas M1 consecutivas de retroceso (verdes en Crash / rojas en Boom) después del último spike.
+      if (this.getAssetCategory(params.symbol) === 'CRASH_BOOM' && params.strategy !== 'MANUAL_APP') {
         const isBoom = (params.symbol || '').toUpperCase().includes('BOOM');
-        const currentPrice = Number(params.entryPrice) || this.lastTickPrice.get(params.symbol) || 0;
-        let spike = this.lastSpikeDetails.get(params.symbol);
+        const currentPrice = (livePrice && livePrice > 0) ? livePrice : Number(params.entryPrice) || 0;
         const now = Date.now();
 
-        // Si no hay spike en memoria o el registrado expiró/resolvió, revisar si en velas M1 recientes ocurrió un spike
-        if ((!spike || spike.resolved || now - spike.timestamp > 20 * 60 * 1000) && currentPrice > 0) {
-          try {
-            const m1Candles = await this.candlesService.findLatest(params.symbol, 60, 15);
-            if (m1Candles && m1Candles.length > 0) {
-              const spikeThresh = this.getSpikeThreshold(params.symbol);
-              for (let i = m1Candles.length - 1; i >= Math.max(0, m1Candles.length - 12); i--) {
-                const c = m1Candles[i];
-                const cOpen = Number(c.open);
-                const cClose = Number(c.close);
-                const cHigh = Number(c.high);
-                const cLow = Number(c.low);
-                const candleDrop = isBoom ? (cClose - cOpen) : (cOpen - cClose);
-                const candleEpochMs = Number(c.epoch) * 1000;
-                if (candleDrop >= spikeThresh && (now - candleEpochMs < 20 * 60 * 1000)) {
-                  const originPrice = isBoom ? cLow : cHigh;
-                  const extremePrice = isBoom ? cHigh : cLow;
-                  const midpoint = Number(((originPrice + extremePrice) / 2).toFixed(3));
-                  const isResolved = !isBoom ? currentPrice >= midpoint : currentPrice <= midpoint;
-                  spike = {
-                    timestamp: candleEpochMs,
-                    originPrice,
-                    extremePrice,
-                    midpoint,
-                    isBoom,
-                    delta: candleDrop,
-                    resolved: isResolved,
-                  };
-                  this.lastSpikeDetails.set(params.symbol, spike);
-                  break;
-                }
-              }
-            }
-          } catch (e: any) {
-            // Ignorar
-          }
+        // A) Candado de tiempo directo: 3 minutos (180s) desde el último tick de spike
+        const lastTickSpikeMs = this.lastSpikeAt.get(params.symbol) || 0;
+        if (lastTickSpikeMs > 0 && now - lastTickSpikeMs < 180_000) {
+          const secAgo = Math.floor((now - lastTickSpikeMs) / 1000);
+          this.logger.warn(
+            `⛔ [BLOQUEO POST-SPIKE < 3 MIN] ${params.symbol} (${params.strategy}): Ocurrió un spike hace ${secAgo}s. Prohibido entrar inmediatamente después de un spike (esperar mínimo 180s + 50% retroceso).`,
+          );
+          return null;
         }
 
-        if (spike && !spike.resolved && (now - spike.timestamp < 20 * 60 * 1000) && currentPrice > 0) {
+        // B) Inspección SIEMPRE obligatoria de las últimas 15 velas M1 en BD + sincronización con spike en memoria
+        let spike = this.lastSpikeDetails.get(params.symbol);
+        try {
+          const m1Raw = await this.candlesService.findLatest(params.symbol, 60, 15);
+          if (m1Raw && m1Raw.length > 0) {
+            const m1Candles = [...m1Raw].sort((a, b) => Number(a.epoch) - Number(b.epoch));
+            const minM1SpikePts = Math.min(3.0, this.getSpikeThreshold(params.symbol) * 0.35);
+
+            // Contar cuántas velas M1 de retroceso limpio llevan desde el último spike M1
+            let retracementM1Count = 0;
+            let lastSpikeIdx = -1;
+            for (let i = m1Candles.length - 1; i >= 0; i--) {
+              const cOpen = Number(m1Candles[i].open);
+              const cClose = Number(m1Candles[i].close);
+              const cHigh = Number(m1Candles[i].high);
+              const cLow = Number(m1Candles[i].low);
+              const favMove = isBoom ? (cClose - cOpen) : (cOpen - cClose);
+              const rangeMove = cHigh - cLow;
+              const isM1Spike = favMove >= minM1SpikePts || (rangeMove >= minM1SpikePts * 1.4 && (isBoom ? cClose > cOpen : cClose < cOpen));
+              if (isM1Spike) {
+                lastSpikeIdx = i;
+                break;
+              }
+              const isRetracingCandle = isBoom ? cClose <= cOpen : cClose >= cOpen;
+              if (isRetracingCandle) {
+                retracementM1Count++;
+              }
+            }
+
+            // Si hubo un spike en las últimas 3 velas M1 (< 3 minutos) o lleva menos de 3 velas M1 de retroceso tras el spike
+            if (lastSpikeIdx !== -1) {
+              const candlesSinceSpike = (m1Candles.length - 1) - lastSpikeIdx;
+              if (candlesSinceSpike < 3 || retracementM1Count < 3) {
+                this.logger.warn(
+                  `⛔ [BLOQUEO POST-SPIKE M1] ${params.symbol} (${params.strategy}): Spike detectado hace ${candlesSinceSpike} vela(s) M1 (${retracementM1Count}/3 velas de retroceso). Prohibido entrar justo después de un spike.`,
+                );
+                return null;
+              }
+
+              // Reconstruir origen real (incluyendo cascadas de varios spikes seguidos en las últimas 15 velas M1)
+              let cascadeStartIdx = lastSpikeIdx;
+              for (let j = lastSpikeIdx - 1; j >= 0; j--) {
+                const prevOpen = Number(m1Candles[j].open);
+                const prevClose = Number(m1Candles[j].close);
+                const prevFav = isBoom ? (prevClose - prevOpen) : (prevOpen - prevClose);
+                if (prevFav >= minM1SpikePts || (lastSpikeIdx - j <= 4)) {
+                  cascadeStartIdx = j;
+                }
+              }
+              const sliceFromCascade = m1Candles.slice(cascadeStartIdx);
+              const m1Origin = !isBoom
+                ? Math.max(...sliceFromCascade.map((c) => Number(c.high)))
+                : Math.min(...sliceFromCascade.map((c) => Number(c.low)));
+              const m1Extreme = !isBoom
+                ? Math.min(...sliceFromCascade.map((c) => Number(c.low)), currentPrice > 0 ? currentPrice : Infinity)
+                : Math.max(...sliceFromCascade.map((c) => Number(c.high)), currentPrice > 0 ? currentPrice : -Infinity);
+              const m1Delta = Math.abs(m1Origin - m1Extreme);
+              const m1Midpoint = Number(((m1Origin + m1Extreme) / 2).toFixed(3));
+              const m1EpochMs = Number(m1Candles[lastSpikeIdx].epoch) * 1000;
+
+              if (m1Delta >= minM1SpikePts) {
+                const mergedOrigin = spike && !spike.resolved
+                  ? (!isBoom ? Math.max(spike.originPrice, m1Origin) : Math.min(spike.originPrice, m1Origin))
+                  : m1Origin;
+                const mergedExtreme = spike && !spike.resolved
+                  ? (!isBoom ? Math.min(spike.extremePrice, m1Extreme) : Math.max(spike.extremePrice, m1Extreme))
+                  : m1Extreme;
+                const mergedMid = Number(((mergedOrigin + mergedExtreme) / 2).toFixed(3));
+                const isResolved = !isBoom ? currentPrice >= mergedMid : currentPrice <= mergedMid;
+                spike = {
+                  timestamp: Math.max(spike?.timestamp || 0, m1EpochMs),
+                  originPrice: mergedOrigin,
+                  extremePrice: mergedExtreme,
+                  midpoint: mergedMid,
+                  isBoom,
+                  delta: Math.abs(mergedOrigin - mergedExtreme),
+                  resolved: isResolved,
+                };
+                this.lastSpikeDetails.set(params.symbol, spike);
+              }
+            }
+          }
+        } catch (e: any) {
+          // Ignorar error de lectura M1
+        }
+
+        // C) Verificación del 50% de retroceso del spike / cascada
+        if (spike && !spike.resolved && (now - spike.timestamp < 30 * 60 * 1000) && currentPrice > 0) {
           if (!isBoom && currentPrice < spike.midpoint) {
-            const pct = Math.max(0, Math.min(100, ((currentPrice - spike.extremePrice) / (spike.originPrice - spike.extremePrice)) * 100));
+            const pct = Math.max(0, Math.min(100, ((currentPrice - spike.extremePrice) / Math.max(0.001, spike.originPrice - spike.extremePrice)) * 100));
             this.logger.warn(
-              `⏳ [ESPERA 50% RETROCESO SPIKE] ${params.symbol} (${params.strategy}): Hubo un spike bajista (${spike.delta.toFixed(2)} pts). Precio actual: ${currentPrice.toFixed(2)} está al ${pct.toFixed(1)}% de retroceso. No operar inmediatamente: esperando que suba al menos a la mitad del spike (${spike.midpoint.toFixed(2)}).`,
+              `⏳ [ESPERA 50% RETROCESO SPIKE] ${params.symbol} (${params.strategy}): Hubo un spike bajista (${spike.delta.toFixed(2)} pts, de ${spike.originPrice.toFixed(2)} a ${spike.extremePrice.toFixed(2)}). Precio en vivo: ${currentPrice.toFixed(2)} (${pct.toFixed(1)}% de retroceso). Prohibido entrar hasta recuperar el 50% (${spike.midpoint.toFixed(2)}).`,
             );
             return null;
           } else if (isBoom && currentPrice > spike.midpoint) {
-            const pct = Math.max(0, Math.min(100, ((spike.extremePrice - currentPrice) / (spike.extremePrice - spike.originPrice)) * 100));
+            const pct = Math.max(0, Math.min(100, ((spike.extremePrice - currentPrice) / Math.max(0.001, spike.extremePrice - spike.originPrice)) * 100));
             this.logger.warn(
-              `⏳ [ESPERA 50% RETROCESO SPIKE] ${params.symbol} (${params.strategy}): Hubo un spike alcista (${spike.delta.toFixed(2)} pts). Precio actual: ${currentPrice.toFixed(2)} está al ${pct.toFixed(1)}% de retroceso. No operar inmediatamente: esperando que baje al menos a la mitad del spike (${spike.midpoint.toFixed(2)}).`,
+              `⏳ [ESPERA 50% RETROCESO SPIKE] ${params.symbol} (${params.strategy}): Hubo un spike alcista (${spike.delta.toFixed(2)} pts, de ${spike.originPrice.toFixed(2)} a ${spike.extremePrice.toFixed(2)}). Precio en vivo: ${currentPrice.toFixed(2)} (${pct.toFixed(1)}% de retroceso). Prohibido entrar hasta retroceder el 50% (${spike.midpoint.toFixed(2)}).`,
             );
             return null;
           } else {

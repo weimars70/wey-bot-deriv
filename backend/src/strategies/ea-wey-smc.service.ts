@@ -273,7 +273,7 @@ export class EaWeySMCService {
       results.push(await this.evaluateSymbol(e.symbol, e.name, e.direction));
     results.sort((a, b) => a.ready !== b.ready ? (a.ready ? -1 : 1) : b.score - a.score);
     this.cachedResults = results;
-    this.cacheExpiry = now + 30_000;
+    this.cacheExpiry = now + 8_000;
     return results;
   }
 
@@ -285,7 +285,7 @@ export class EaWeySMCService {
     if (!entry) return null;
     const result = await this.evaluateSymbol(entry.symbol, entry.name, entry.direction);
     this.chartCacheData.set(symbol, result.chart);
-    this.chartCacheExpiry.set(symbol, now + 30_000);
+    this.chartCacheExpiry.set(symbol, now + 8_000);
     return result.chart;
   }
 
@@ -294,16 +294,18 @@ export class EaWeySMCService {
     const def: EaWeySMCResult = { symbol, name, direction, ready: false, score: 0, conditions: { htfBias: false, htfBiasLabel: 'NEUTRAL', hasActiveZone: false, hasPullback: false, hasChoCH: false, inDiscountPremium: false, hasRecentSpike: false, notExhausted: false }, pricePosition: 50, currentPrice: 0, entryPrice: 0, stopLossPrice: 0, takeProfitPrice: 0, riskReward: 0, reason: 'Error', chart: empty };
 
     try {
-      const [m5Raw, h1Raw] = await Promise.all([
+      const [m1Raw, m5Raw, h1Raw] = await Promise.all([
+        this.candlesService.findLatest(symbol, 60, 15),
         this.candlesService.findLatest(symbol, 300, 300),
         this.candlesService.findLatest(symbol, 3600, 150),
       ]);
+      const m1: CandleRaw[] = [...(m1Raw || [])].reverse().map(c => ({ open: +c.open, high: +c.high, low: +c.low, close: +c.close, epoch: +c.epoch }));
       const m5: CandleRaw[] = [...m5Raw].reverse().map(c => ({ open: +c.open, high: +c.high, low: +c.low, close: +c.close, epoch: +c.epoch }));
       const h1: CandleRaw[] = [...h1Raw].reverse().map(c => ({ open: +c.open, high: +c.high, low: +c.low, close: +c.close, epoch: +c.epoch }));
 
       if (m5.length < 30 || h1.length < 6) return { ...def, reason: 'Datos insuficientes' };
 
-      const currentPrice = m5[m5.length - 1].close;
+      const currentPrice = m1.length > 0 ? m1[m1.length - 1].close : m5[m5.length - 1].close;
       const atr = calcATR(m5, 14);
       if (atr === 0) return { ...def, currentPrice, reason: 'ATR cero' };
 
@@ -391,11 +393,32 @@ export class EaWeySMCService {
         ? (direction === 'BUY' ? currentPrice <= smcZone.top : currentPrice >= smcZone.bottom)
         : false;
 
-      const conditions: EaWeySMCConditions = { htfBias, htfBiasLabel, hasActiveZone, hasPullback, hasChoCH, inDiscountPremium, hasRecentSpike, notExhausted };
+      // Bloqueo estricto post-spike: NO activar señal si hubo un spike en las últimas 2 velas M5 o en las últimas 3 velas M1 sin retroceso
+      const last2M5 = m5.slice(-2);
+      const hadImmediateM5Spike = last2M5.some(c =>
+        direction === 'SELL' ? (c.open - c.close) >= Math.max(2.5, 0.8 * atr) : (c.close - c.open) >= Math.max(2.5, 0.8 * atr),
+      );
+      let m1RetracementCount = 0;
+      for (let i = m1.length - 1; i >= 0; i--) {
+        const c = m1[i];
+        const isSpikeM1 = direction === 'SELL'
+          ? (c.open - c.close) >= 2.5 || ((c.high - c.low) >= 4.5 && c.close < c.open)
+          : (c.close - c.open) >= 2.5 || ((c.high - c.low) >= 4.5 && c.close > c.open);
+        if (isSpikeM1) break;
+        if (direction === 'SELL' ? c.close >= c.open : c.close <= c.open) {
+          m1RetracementCount++;
+        } else {
+          break;
+        }
+      }
+      const postSpikeCooldownOk = !hadImmediateM5Spike && (m1.length === 0 || m1RetracementCount >= 3);
+
+      const conditions: EaWeySMCConditions = { htfBias, htfBiasLabel, hasActiveZone, hasPullback, hasChoCH, inDiscountPremium, hasRecentSpike, notExhausted: notExhausted && postSpikeCooldownOk };
       const score = Object.values(conditions).filter(v => v === true).length;
-      const ready = score >= 6 && htfBias && hasActiveZone && hasPullback && hasChoCH && inDiscountPremium && inZone;
+      const ready = score >= 6 && htfBias && hasActiveZone && hasPullback && hasChoCH && inDiscountPremium && inZone && postSpikeCooldownOk;
 
       const missing: string[] = [];
+      if (!postSpikeCooldownOk) missing.push('bloqueo post-spike (esperando mínimo 3 velas M1 de retroceso)');
       if (!htfBias)           missing.push(`sesgo H1 ${htfBiasLabel}`);
       if (!hasActiveZone)     missing.push('sin zona SMC activa');
       if (!inZone)            missing.push(direction === 'BUY' ? 'precio aún no toca el OB compra' : 'precio aún no toca el OB venta');

@@ -324,14 +324,20 @@ export class CrashIaStrategyService {
     const rsi_M5 = this.calculateRSI(m5Candles.map((c) => Number(c.close)), 14);
     const rsiOk = isBoom ? (rsi_M5 <= 72.0 && rsi_M5 >= 22.0) : (rsi_M5 >= 28.0 && rsi_M5 <= 78.0);
 
-    // 9. Filtro 3: Velas M1 de enfriamiento tras spike
-    // Mínimo 2 velas de enfriamiento M1 hacia la zona de recarga
+    // 9. Filtro 3: Velas M1 de enfriamiento tras spike (PROHIBIDO entrar justo después de un spike)
+    // Mínimo 3 velas de enfriamiento M1 hacia la zona de recarga + sin spike en la vela M5 actual
     const consecutiveGreenM1 = this.getConsecutiveGreenM1(m1Candles);
     const consecutiveRedM1 = this.getConsecutiveRedM1(m1Candles);
-    const minGreenRequired = 2;
-    const greenOk = isBoom
+    const minGreenRequired = 3;
+    const lastM5 = m5Candles.length > 0 ? m5Candles[m5Candles.length - 1] : null;
+    const lastM5Spiked = lastM5
+      ? (!isBoom
+          ? Number(lastM5.open) - currentPrice >= Math.max(2.5, m5CandleHeight * 0.8)
+          : currentPrice - Number(lastM5.open) >= Math.max(2.5, m5CandleHeight * 0.8))
+      : false;
+    const greenOk = !lastM5Spiked && (isBoom
       ? consecutiveRedM1 >= minGreenRequired
-      : consecutiveGreenM1 >= minGreenRequired;
+      : consecutiveGreenM1 >= minGreenRequired);
 
     // 10. Filtro 4: Vela Amiga H1
     const { velaAmigaOk, velaAmigaMsg } = this.checkVelaAmigaH1(h1Candles, isBoom);
