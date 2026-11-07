@@ -1786,7 +1786,7 @@ export class TradingBotService implements OnModuleInit {
             const takeProfitPrice: number | null = null;
 
             this.logger.log(
-              `🚀 [CRASH IA ENTRADA] ${sym} VENTA (SELL) confirmada en Zona Línea Morada -> 50% y EN TENDENCIA (${evalData.trendM15}). Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
+              `🚀 [CRASH IA ENTRADA] ${sym} VENTA (SELL) confirmada en Zona Línea Morada -> 50% y EN TENDENCIA (${evalData.filters?.trendM15}). Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
             );
 
             await this.openTrade({
@@ -1829,7 +1829,7 @@ export class TradingBotService implements OnModuleInit {
             const takeProfitPrice: number | null = null;
 
             this.logger.log(
-              `🚀 [BOOM IA ENTRADA] ${sym} COMPRA (BUY) confirmada en Zona Línea Morada -> 50% y EN TENDENCIA (${evalData.trendM15}). Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
+              `🚀 [BOOM IA ENTRADA] ${sym} COMPRA (BUY) confirmada en Zona Línea Morada -> 50% y EN TENDENCIA (${evalData.filters?.trendM15}). Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
             );
 
             await this.openTrade({

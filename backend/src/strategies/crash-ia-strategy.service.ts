@@ -1295,7 +1295,7 @@ export class CrashIaStrategyService {
 
     const targetReactionPrice = parseFloat((isBoom ? boxCeiling : boxFloor).toFixed(3));
     const distToReaction = parseFloat(Math.abs(currentPrice - targetReactionPrice).toFixed(3));
-    if (!hasVPattern) {
+    if (!hasValidVPattern) {
       return {
         isViable: false,
         reason: `Sin patrón V/Λ reciente ni Order Block activo en M5 (esperando formación de estructura)`,
