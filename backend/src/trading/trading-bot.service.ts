@@ -499,7 +499,6 @@ export class TradingBotService implements OnModuleInit {
   getMinSlPoints(symbol: string): number {
     const up = (symbol || '').toUpperCase();
     if (up.includes('600') && up.includes('CRASH')) return 32.0; // 8 USD a 0.25 lotes
-    if (up.includes('300') && up.includes('CRASH')) return 20.0; // 10 USD a 0.50 lotes (~19-20 min)
     return 10.0; // ~5 USD a 0.50 lotes
   }
 
@@ -509,7 +508,6 @@ export class TradingBotService implements OnModuleInit {
     if (category === 'SYNTHETIC_OTHER') return 7.0;
     const up = (symbol || '').toUpperCase();
     if (up.includes('600') && up.includes('CRASH')) return 8.0;
-    if (up.includes('300') && up.includes('CRASH')) return 10.0; // 19 minutos de SL a 0.50 lotes (~19 pts = $9.50-$10 USD)
     return 5.0;
   }
 
@@ -1779,14 +1777,16 @@ export class TradingBotService implements OnModuleInit {
 
           const evalScore = Number(evalData.score) || 0;
           const minReqScore = this.getMinScoreForSymbol(sym);
-          if (inReactionZone && evalData.canSell && m5IsViable && evalScore >= minReqScore) {
+          const isTrendOk = Boolean(evalData.filters?.trendOk);
+          const hasStructure = Boolean(evalData.vCandidate || evalData.activeOrderBlock?.inZone);
+          if (inReactionZone && evalData.canSell && isTrendOk && hasStructure && m5IsViable && evalScore >= minReqScore) {
             const stopLossPrice = Number(
               (evalData.stopLossPrice || boxCeiling + (evalData.m5CandleHeight || 3.0)).toFixed(3),
             );
             const takeProfitPrice: number | null = null;
 
             this.logger.log(
-              `🚀 [CRASH IA ENTRADA] ${sym} VENTA (SELL) confirmada en Zona Línea Morada -> 50%. Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
+              `🚀 [CRASH IA ENTRADA] ${sym} VENTA (SELL) confirmada en Zona Línea Morada -> 50% y EN TENDENCIA (${evalData.trendM15}). Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
             );
 
             await this.openTrade({
@@ -1806,7 +1806,7 @@ export class TradingBotService implements OnModuleInit {
         } else {
           // ── BOOM (COMPRAS):
           // Zona de Reacción Real: Entrar cuando el precio toca o se ubica entre la Línea Morada (vLine)
-          // y la Línea Punteada (50% / dotted50) o el piso de la caja (boxFloor).
+          // y la Línea Punteada (50% / dotted50) o el piso de la caja (boxFloor), SIEMPRE EN TENDENCIA.
           const inReactionZone =
             (evalData.status === 'EN_BASE_CAJA' || evalData.status === 'EN_ZONA_50') &&
             currentPrice <= vLine &&
@@ -1820,14 +1820,16 @@ export class TradingBotService implements OnModuleInit {
 
           const evalScore = Number(evalData.score) || 0;
           const minReqScore = this.getMinScoreForSymbol(sym);
-          if (inReactionZone && evalData.canBuy && m5IsViable && evalScore >= minReqScore) {
+          const isTrendOk = Boolean(evalData.filters?.trendOk);
+          const hasStructure = Boolean(evalData.vCandidate || evalData.activeOrderBlock?.inZone);
+          if (inReactionZone && evalData.canBuy && isTrendOk && hasStructure && m5IsViable && evalScore >= minReqScore) {
             const stopLossPrice = Number(
               (evalData.stopLossPrice || boxFloor - (evalData.m5CandleHeight || 3.0)).toFixed(3),
             );
             const takeProfitPrice: number | null = null;
 
             this.logger.log(
-              `🚀 [BOOM IA ENTRADA] ${sym} COMPRA (BUY) confirmada en Zona Línea Morada -> 50%. Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
+              `🚀 [BOOM IA ENTRADA] ${sym} COMPRA (BUY) confirmada en Zona Línea Morada -> 50% y EN TENDENCIA (${evalData.trendM15}). Precio: ${currentPrice}, Línea Morada: ${vLine}, 50%: ${dotted50}, SL: ${stopLossPrice}`,
             );
 
             await this.openTrade({
@@ -1926,10 +1928,14 @@ export class TradingBotService implements OnModuleInit {
         );
 
         // 3) Asegurar que después de haber salido (en SL o Trailing Stop) el precio esté de regreso en la zona
+        //    Y QUE EL ÍNDICE ESTÉ EN TENDENCIA Y CUMPLA CON LO QUE TIENE (canBuy / canSell)
         const distFromExit = Math.abs(currentPrice - zone.exitPrice);
         const returnedAfterMove = distFromExit >= zoneTolerance * 0.4 || Date.now() - zone.exitTimeMs >= 90_000;
+        const fulfillsTrendAndSetup = Boolean(
+          evalData?.filters?.trendOk && (isBoom ? evalData?.canBuy : evalData?.canSell),
+        );
 
-        if ((backAtOriginalEntryZone || backAtPurpleZone) && returnedAfterMove) {
+        if ((backAtOriginalEntryZone || backAtPurpleZone) && returnedAfterMove && fulfillsTrendAndSetup) {
           const validStrategy = (
             zone.strategy === 'CRASH_BOOM_IA' ||
             zone.strategy === 'SPIKE_RADAR' ||

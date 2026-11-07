@@ -43,6 +43,13 @@ export class WatchedLevelsService implements OnModuleInit {
       { status: 'PENDING', evaluationReason: 'Restablecido al inicio. Esperando entrada 2 min antes en retroceso.' },
     );
 
+    // Normalizar lote máximo a 0.50 en todos los niveles vigilados de Crash y Boom para proteger el SL de $5 USD
+    try {
+      await this.levels.query(`UPDATE watched_entry_levels SET lot = 0.5 WHERE lot > 0.5`);
+    } catch {
+      // ignore
+    }
+
     // Escaneo inicial de Gaps M1 recientes (últimos 7 días) y escaneo continuo cada 60s
     setTimeout(() => {
       void this.scanAndRegisterRecentM1Gaps(7);
@@ -238,15 +245,8 @@ export class WatchedLevelsService implements OnModuleInit {
     }
   }
 
-  private suggestedLot(symbol: string): number {
-    const value = (symbol || '').toUpperCase().replace(/\s+/g, '');
-    return value.includes('CRASH600') ||
-      value.includes('CRASH900') ||
-      value.includes('BOOM600') ||
-      value.includes('BOOM900') ||
-      value.includes('BOOM1000')
-      ? 0.5
-      : 1;
+  private suggestedLot(_symbol: string): number {
+    return 0.5;
   }
 
   list(filters: { symbol?: string; price?: number; minPrice?: number; maxPrice?: number }) {

@@ -23,7 +23,7 @@ input int      PollIntervalMs          = 400;            // Frecuencia de sincro
 input int      SlippagePoints          = 20;             // Desviacion maxima permitida (puntos)
 input int      M5XHistoryCandles       = 9000;           // Historial M5 exportado por indice (~31 dias)
 input group "=== Limites de Concurrencia por Grupo ==="
-input int      MaxCrashBoomTrades      = 3;              // Maximo concurrentes en Crash y Boom (3)
+input int      MaxCrashBoomTrades      = 4;              // Maximo concurrentes en Crash y Boom (4)
 input int      MaxXauusdTrades         = 1;              // Maximo concurrentes en XAUUSD (1)
 input int      MaxOtherTrades          = 2;              // Maximo concurrentes en los demas indices y forex (2)
 input int      NoSpikeTimeoutM1Bars    = 8;              // SL maximo en Crash/Boom: 8 minutos (8 velas M1)
@@ -78,8 +78,6 @@ double GetMaxLossForSymbolUSD(string sym)
    StringToUpper(up);
    if(StringFind(up, "600") >= 0 && StringFind(up, "CRASH") >= 0)
       return MaxLossCrash600USD;
-   if(StringFind(up, "300") >= 0 && StringFind(up, "CRASH") >= 0)
-      return 10.00; // 19 minutos a 0.50 lotes (~19-20 pts)
    return MaxLossDefaultUSD;
 }
 

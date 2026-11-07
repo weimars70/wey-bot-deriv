@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
 import { TradeRecord } from './trade.entity';
@@ -36,7 +36,7 @@ export interface HourlyStats {
 }
 
 @Injectable()
-export class TradingStatsService {
+export class TradingStatsService implements OnModuleInit {
   private readonly logger = new Logger(TradingStatsService.name);
 
   // ── Configuración de Retroalimentación Adaptativa ──
@@ -46,11 +46,46 @@ export class TradingStatsService {
   private blockedHoursSet = new Set<number>([22]); // Horas bloqueadas dinámicamente por el Agente IA según horario y resultados
   private maxConsecutiveLosses = 2;     // 2 pérdidas seguidas activan pausa preventiva
   private circuitBreakerCooldownMs = 90 * 60 * 1000; // 90 minutos de pausa preventiva tras 2 SL seguidos
+  private lastScheduled23hRunDate = '';
 
   constructor(
     @InjectRepository(TradeRecord)
     private readonly tradeRepo: Repository<TradeRecord>,
   ) {}
+
+  async onModuleInit() {
+    // Ejecutar evaluación inicial al arrancar si no ha corrido en las últimas 8 horas
+    setTimeout(async () => {
+      try {
+        await this.ensureAgentLogsTable();
+        const latest = await this.tradeRepo.query(
+          `SELECT "runAt" FROM agent_optimization_logs ORDER BY "runAt" DESC LIMIT 1`,
+        );
+        const lastRunMs = latest?.[0]?.runAt ? new Date(latest[0].runAt).getTime() : 0;
+        if (Date.now() - lastRunMs >= 8 * 3600 * 1000) {
+          this.logger.log('🤖 [AGENTE IA 11:00 PM] Ejecutando evaluación automática pendiente en el VPS...');
+          await this.runAgentEvaluationNow('SCHEDULED_23H');
+        }
+      } catch (e: any) {
+        this.logger.debug(`Error en verificación inicial del Agente IA: ${e?.message}`);
+      }
+    }, 8000);
+
+    // Programador interno en el VPS: corre todos los días a las 11:00 PM (23:00) sin depender del PC local
+    setInterval(async () => {
+      try {
+        const now = new Date();
+        const dateKey = now.toISOString().slice(0, 10);
+        if (now.getHours() === 23 && now.getMinutes() <= 5 && this.lastScheduled23hRunDate !== dateKey) {
+          this.lastScheduled23hRunDate = dateKey;
+          this.logger.log(`🤖 [AGENTE IA 11:00 PM] Ejecución nocturna programada (${dateKey} 23:00)...`);
+          await this.runAgentEvaluationNow('SCHEDULED_23H');
+        }
+      } catch (e: any) {
+        this.logger.debug(`Error en cron 23:00 del Agente IA: ${e?.message}`);
+      }
+    }, 60_000);
+  }
 
   // ════════════════════════════════════════════════════════════════════════════
   // ── 1. GENERACIÓN DE INFORME DIARIO DE OPERACIONES ─────────────────────────
@@ -543,13 +578,11 @@ export class TradingStatsService {
    * bloquea la entrada para proteger el capital.
    */
   async canTradeAdaptive(symbol: string, strategy: string): Promise<{ allowed: boolean; reason?: string }> {
-    // Las estrategias H1_NO_WICK, DOUBLE_WICK_MECHA y WATCHED_LEVEL (Gaps 2 min antes) operan directamente
+    // Las estrategias H1_NO_WICK y DOUBLE_WICK_MECHA operan directamente
     if (
       !this.adaptiveEnabled ||
       strategy === 'H1_NO_WICK' ||
-      strategy === 'DOUBLE_WICK_MECHA' ||
-      strategy === 'WATCHED_LEVEL' ||
-      strategy === 'WATCHED_LEVEL_BT'
+      strategy === 'DOUBLE_WICK_MECHA'
     ) {
       return { allowed: true };
     }
@@ -557,14 +590,14 @@ export class TradingStatsService {
     const currentHour = new Date().getHours();
     const symUp = (symbol || '').toUpperCase();
 
-    // 0. Bloqueo horario controlado dinámicamente por el Agente IA (ej. Hora 22:00 del backtest o franjas ajustadas por el Agente)
+    // 0. Bloqueo horario controlado dinámicamente por el Agente IA (aplica a Zonas V y Gaps)
     if (this.blockedHoursSet.has(currentHour)) {
       const msg = `⛔ [FILTRO HORARIO AGENTE IA] ${symUp}: La franja ${currentHour}:00 - ${currentHour}:59 está restringida por el Agente IA. Entrada bloqueada.`;
       this.logger.warn(msg);
       return { allowed: false, reason: msg };
     }
 
-    // 1. Verificar Circuit Breaker por rachas perdedoras recientes en este símbolo
+    // 1. Verificar Circuit Breaker por rachas perdedoras recientes en este símbolo (2 SL seguidos = pausa de 90-120 min)
     const cb = await this.checkSymbolCircuitBreaker(symUp);
     if (cb.active) {
       const minutesLeft = Math.ceil(((cb.until || Date.now()) - Date.now()) / 60000);
@@ -924,7 +957,7 @@ export class TradingStatsService {
    * Ejecuta en caliente una evaluación del agente sobre las últimas 24-48h de operaciones en BD,
    * ajusta los umbrales adaptativos en memoria si detecta rachas adversas y guarda el reporte en bitácora.
    */
-  async runAgentEvaluationNow() {
+  async runAgentEvaluationNow(triggerType: 'MANUAL_UI' | 'SCHEDULED_23H' = 'MANUAL_UI') {
     await this.ensureAgentLogsTable();
     const nowSec = Math.floor(Date.now() / 1000);
     const sinceSec = nowSec - 48 * 3600; // Últimas 48 horas
@@ -1010,7 +1043,8 @@ export class TradingStatsService {
     }
 
     const actions: string[] = [
-      'Zonas V (CRASH_BOOM_IA) habilitada para entrar directamente entre la Línea Morada (vLinePrice) y la Línea Punteada (50%), incluyendo soporte/resistencia H1 y Order Blocks M5 sin bloqueo por retroceso M15.',
+      'Zonas V (CRASH_BOOM_IA) ajustada: SOLO ejecuta trade si el índice cumple todos sus requisitos (Patrón V/Λ u Order Block M5 activo, zona entre Línea Morada y 50%, RSI M5, enfriamiento M1 y viabilidad M5) y ADEMÁS está estrictamente EN TENDENCIA M15 (trendOk = true).',
+      'Lote en niveles de Gap (WATCHED_LEVEL) normalizado a 0.50 y SL monetario unificado a -$5.00 USD (eliminando pérdidas de -$10.00 USD en Crash 300N) con Circuit Breaker activo en todas las estrategias.',
     ];
     if (winRatePct < 45 && total >= 4) {
       this.minWinRateThreshold = 45.0;
@@ -1058,8 +1092,8 @@ export class TradingStatsService {
       (bestSymbols.length ? `Mejor efectividad en: ${bestSymbols.slice(0, 3).join('; ')}.` : '');
 
     const saved = await this.createAgentOptimizationLog({
-      triggerType: 'MANUAL_UI',
-      periodAnalyzed: 'Últimas 48 Horas (En Vivo)',
+      triggerType,
+      periodAnalyzed: triggerType === 'SCHEDULED_23H' ? `Evaluación Nocturna 11:00 PM (${new Date().toISOString().slice(0, 10)})` : 'Últimas 48 Horas (En Vivo)',
       tradesAnalyzed: total,
       winsCount: wins,
       lossesCount: losses,
@@ -1067,8 +1101,8 @@ export class TradingStatsService {
       netProfitUsd: Number(netProfit.toFixed(2)),
       diagnosis,
       actionsTaken: actions,
-      filesModified: 'Parámetros Adaptativos en Memoria + DerivApp_Bridge_EA.mq5 sincronizado',
-      commitHash: '7971d58',
+      filesModified: 'crash-ia-strategy.service.ts, trading-bot.service.ts, trading-stats.service.ts, watched-levels.service.ts, DerivApp_Bridge_EA.mq5',
+      commitHash: 'V_TREND_STRICT',
       deployStatus: 'ACTIVO_EN_VPS',
     });
 

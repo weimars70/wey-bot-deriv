@@ -424,24 +424,40 @@ export class CrashIaStrategyService {
       m5Viability.reason = retestInfo.reason;
     }
 
-    // REGLA USUARIO ZONAS V: Entrar cuando el precio toca/entra entre la Línea Morada (vLinePrice)
-    // y la Línea Punteada (50% / entryLevel50) o dentro del Order Block M5.
+    // REGLA USUARIO ZONAS V: Solo hacer el trade si el índice cumple con todo lo que tiene
+    // (Patrón V/Λ u Order Block M5 válido, en zona entre Línea Morada y 50%, RSI M5 OK, enfriamiento M1 OK, viabilidad M5 OK)
+    // Y QUE ADEMÁS ESTÉ EN TENDENCIA (trendOk === true en M15).
     const isInOrderBlock = Boolean(activeOrderBlock && activeOrderBlock.inZone);
+    const hasValidStructure = Boolean(vCandidate) || isInOrderBlock;
 
     const inEntryZone =
       status === 'EN_BASE_CAJA' ||
       status === 'EN_ZONA_50' ||
       isInOrderBlock;
 
-    // No bloquear por M15 en contra (trendOk) cuando el retroceso llega a la Línea Morada / Caja 50%,
-    // ya que el movimiento de acercamiento a la zona ocurre en dirección contraria al spike.
-    const canSell = Boolean(!isBoom && inEntryZone && rsiOk && greenOk && m5Viability.isViable);
-    const canBuy = Boolean(isBoom && inEntryZone && rsiOk && greenOk && m5Viability.isViable);
+    const canSell = Boolean(
+      !isBoom &&
+        inEntryZone &&
+        hasValidStructure &&
+        trendOk &&
+        rsiOk &&
+        greenOk &&
+        m5Viability.isViable,
+    );
+    const canBuy = Boolean(
+      isBoom &&
+        inEntryZone &&
+        hasValidStructure &&
+        trendOk &&
+        rsiOk &&
+        greenOk &&
+        m5Viability.isViable,
+    );
 
     if (canSell || canBuy) {
       statusLabel = isBoom
-        ? '🎯 ZONA SNIPER CONFIRMADA (BUY)'
-        : '🎯 ZONA SNIPER CONFIRMADA (SELL)';
+        ? '🎯 ZONA SNIPER CONFIRMADA EN TENDENCIA (BUY)'
+        : '🎯 ZONA SNIPER CONFIRMADA EN TENDENCIA (SELL)';
       statusSeverity = 'success';
     }
 
@@ -508,15 +524,18 @@ export class CrashIaStrategyService {
       this.logger.debug(`Error cargando gaps para ${sym}: ${e?.message}`);
     }
 
-    let evalScore = 55;
+    let evalScore = 40;
     if (inEntryZone) evalScore += 15;
-    if (rsiOk) evalScore += 10;
-    if (greenOk) evalScore += 10;
-    if (m5Viability && m5Viability.isViable) evalScore += 10;
-    if (trendOk) evalScore += 5;
+    if (hasValidStructure) evalScore += 15;
+    if (trendOk) evalScore += 15;
+    if (rsiOk) evalScore += 5;
+    if (greenOk) evalScore += 5;
+    if (m5Viability && m5Viability.isViable) evalScore += 5;
     if (velaAmigaOk) evalScore += 5;
     if (activeOrderBlock && (activeOrderBlock.status === 'FRESCO' || activeOrderBlock.inZone)) evalScore += 5;
-    if (vCandidate) evalScore += 5;
+    if (!trendOk || !hasValidStructure) {
+      evalScore = Math.min(evalScore, 65);
+    }
     evalScore = Math.min(100, evalScore);
 
     return {
@@ -1269,18 +1288,26 @@ export class CrashIaStrategyService {
       }
     }
 
-    // 3. Zona de Línea Morada a Línea Punteada 50% (y Caja V/Λ o Línea H1):
-    // Viable en cuanto el precio toca la Línea Morada y se mantiene dentro de la caja.
+    // 3. Zona de Línea Morada a Línea Punteada 50% (solo si el índice realmente tiene un patrón V/Λ activo):
     const inPurpleToBoxZone = isBoom
       ? currentPrice <= boxCeiling && currentPrice >= boxFloor
       : currentPrice >= boxFloor && currentPrice <= boxCeiling;
 
     const targetReactionPrice = parseFloat((isBoom ? boxCeiling : boxFloor).toFixed(3));
     const distToReaction = parseFloat(Math.abs(currentPrice - targetReactionPrice).toFixed(3));
+    if (!hasVPattern) {
+      return {
+        isViable: false,
+        reason: `Sin patrón V/Λ reciente ni Order Block activo en M5 (esperando formación de estructura)`,
+        targetReactionPrice,
+        distToReaction,
+        reactionType: 'RETROCESO_50_M5',
+      };
+    }
     return {
       isViable: inPurpleToBoxZone,
       reason: inPurpleToBoxZone
-        ? `Precio en zona activa entre Línea Morada (${targetReactionPrice}) y 50% (${entryLevel50.toFixed(2)})`
+        ? `Precio en zona activa con Patrón V/Λ entre Línea Morada (${targetReactionPrice}) y 50% (${entryLevel50.toFixed(2)})`
         : `Esperando llegada a la Línea Morada (${targetReactionPrice}; dist ${distToReaction} pts)`,
       targetReactionPrice,
       distToReaction,
