@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import { useAuthStore } from 'stores/auth.store';
+import { Notify } from 'quasar';
 
 let socket = null;
 
@@ -23,6 +24,21 @@ export function getSocket() {
     auth: { token: authStore.token },
     transports: ['websocket', 'polling'],
     autoConnect: true,
+  });
+
+  socket.on('session.terminated', (data) => {
+    disconnectSocket();
+    authStore.logout();
+    Notify.create({
+      type: 'warning',
+      icon: 'phonelink_erase',
+      message: data?.message || 'Tu sesión ha sido cerrada porque se inició sesión en otro dispositivo.',
+      position: 'top',
+      timeout: 7000,
+    });
+    if (typeof window !== 'undefined' && !window.location.href.includes('login')) {
+      window.location.reload();
+    }
   });
 
   return socket;

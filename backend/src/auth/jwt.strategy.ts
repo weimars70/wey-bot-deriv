@@ -27,6 +27,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Usuario no válido');
     }
 
-    return { userId: payload.sub, email: payload.email };
+    // ── CANDADO DE SESIÓN ÚNICA POR DISPOSITIVO ──
+    // Si el usuario tiene una sesión activa registrada en el sistema,
+    // el token debe pertenecer estrictamente a esa sesión activa.
+    // Si el sid no coincide, significa que se inició sesión en otro dispositivo.
+    if (user.activeSessionId && (!payload.sid || payload.sid !== user.activeSessionId)) {
+      throw new UnauthorizedException(
+        'Tu sesión ha sido cerrada porque se inició sesión en otro dispositivo.',
+      );
+    }
+
+    return { userId: payload.sub, email: payload.email, sid: payload.sid };
   }
 }

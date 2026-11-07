@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
@@ -20,6 +21,7 @@ export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -38,11 +40,15 @@ export class AuthService {
       dto.phoneNumber,
     );
 
-    return this.buildSession(user.id, user.email);
+    const sessionId = randomUUID();
+    await this.usersService.setActiveSession(user.id, sessionId);
+
+    return this.buildSession(user.id, user.email, sessionId);
   }
 
   async login(dto: LoginDto) {
-    const user = await this.usersService.findByEmail(dto.email);
+    const normalizedEmail = (dto.email || '').trim().toLowerCase();
+    const user = await this.usersService.findByEmail(normalizedEmail);
     if (!user) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
@@ -52,9 +58,40 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    // Actualizar timestamp de última actividad
-    const sessionId = user.activeSessionId || randomUUID();
+    // ── VALIDACIÓN DE SESIÓN ÚNICA POR DISPOSITIVO ──
+    // Se considera sesión activa en otro dispositivo si existe activeSessionId
+    // y ha registrado actividad en los últimos 5 minutos.
+    const SESSION_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+    const isSessionActive = Boolean(
+      user.activeSessionId &&
+      user.lastActiveAt &&
+      (Date.now() - new Date(user.lastActiveAt).getTime() < SESSION_ACTIVE_WINDOW_MS),
+    );
+
+    const isForce = dto.forceLogoutOthers === true;
+
+    if (isSessionActive && !isForce) {
+      this.logger.warn(`Intento de login con sesión activa en otro dispositivo: ${user.email}`);
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'ACTIVE_SESSION_EXISTS',
+        message: 'Ya hay una sesión iniciada en otro dispositivo.',
+        lastActiveAt: user.lastActiveAt,
+      });
+    }
+
+    // Generar un nuevo sessionId único para este dispositivo
+    const sessionId = randomUUID();
     await this.usersService.setActiveSession(user.id, sessionId);
+
+    // Si había una sesión previa, revocarla en tiempo real en los demás dispositivos
+    if (user.activeSessionId || isSessionActive) {
+      this.logger.log(`Sesión previa revocada para ${user.email}. Nueva sesión: ${sessionId}`);
+      this.eventEmitter.emit('auth.session_revoked', {
+        userId: user.id,
+        newSessionId: sessionId,
+      });
+    }
 
     return this.buildSession(user.id, user.email, sessionId);
   }
@@ -73,7 +110,7 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
     if (!user) throw new Error('Usuario no encontrado');
     const sid = sessionId || user.activeSessionId || randomUUID();
-    if (!user.activeSessionId) {
+    if (user.activeSessionId !== sid) {
       await this.usersService.setActiveSession(user.id, sid);
     }
     const accessToken = this.jwtService.sign({ sub: userId, email, sid });

@@ -109,4 +109,22 @@ export class RealtimeGateway
     if (!alert?.id) return;
     this.server.emit('signal-center.alert', alert);
   }
+
+  // Desconecta de inmediato los sockets de sesiones anteriores cuando se inicia sesión en otro dispositivo
+  @OnEvent('auth.session_revoked')
+  onSessionRevoked(event: { userId: string; newSessionId: string }) {
+    if (!event?.userId || !this.server?.sockets?.sockets) return;
+    for (const [id, client] of this.server.sockets.sockets) {
+      const u = client.data?.user;
+      if (u && (u.sub === event.userId || u.userId === event.userId)) {
+        if (u.sid && u.sid !== event.newSessionId) {
+          this.logger.warn(`Desconectando socket de sesión revocada en otro dispositivo: ${u.email} (${id})`);
+          client.emit('session.terminated', {
+            message: 'Tu sesión ha sido cerrada porque se inició sesión en otro dispositivo.',
+          });
+          client.disconnect(true);
+        }
+      }
+    }
+  }
 }

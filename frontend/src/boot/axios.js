@@ -1,5 +1,6 @@
 import { boot } from 'quasar/wrappers';
 import axios from 'axios';
+import { Notify } from 'quasar';
 
 // Detección de entorno: Navegador web vs Capacitor APK nativo
 const isNativeMobile = typeof window !== 'undefined' && (
@@ -46,10 +47,20 @@ export default boot(({ app, router }) => {
       const status  = error.response?.status;
       const config  = error.config;
 
-      // 401: token inválido o expirado → redirigir a login
+      // 401: token inválido, expirado o cerrado en otro dispositivo → redirigir a login
       if (status === 401) {
         localStorage.removeItem(TOKEN_KEY);
-        if (router.currentRoute.value.name !== 'login') {
+        localStorage.removeItem('deriv_app_user');
+        const isLoginRoute = router.currentRoute.value?.name === 'login';
+        if (!isLoginRoute) {
+          const msg = error.response?.data?.message || 'Tu sesión ha sido cerrada porque se inició sesión en otro dispositivo.';
+          Notify.create({
+            type: 'warning',
+            icon: 'phonelink_erase',
+            message: msg,
+            position: 'top',
+            timeout: 6000,
+          });
           router.push({ name: 'login' });
         }
         return Promise.reject(error);

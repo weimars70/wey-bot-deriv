@@ -7,7 +7,7 @@
       </q-card-section>
 
       <q-card-section>
-        <q-form class="q-gutter-md" @submit.prevent="onSubmit">
+        <q-form class="q-gutter-md" @submit.prevent="onSubmit(false)">
           <q-input
             v-model="email"
             type="email"
@@ -37,9 +37,9 @@
                 size="sm"
                 color="negative"
                 icon="phonelink_erase"
-                label="Cerrar sesión anterior y entrar aquí"
+                label="Cerrar sesión en otro dispositivo y entrar"
                 :loading="loading"
-                @click="onForceLogin"
+                @click="onConfirmForceLogin"
               />
             </div>
           </div>
@@ -53,6 +53,46 @@
         <router-link to="/register">Regístrate</router-link>
       </q-card-section>
     </q-card>
+
+    <!-- Modal de confirmación cuando ya existe sesión en otro dispositivo -->
+    <q-dialog v-model="showSessionDialog" persistent>
+      <q-card style="width: 100%; max-width: 420px" class="q-pa-sm">
+        <q-card-section class="row items-center q-pb-none">
+          <q-avatar icon="phonelink_lock" color="amber-1" text-color="warning" size="44px" class="q-mr-sm" />
+          <div>
+            <div class="text-subtitle1 text-weight-bold">Sesión activa detectada</div>
+            <div class="text-caption text-grey">Dispositivo en uso</div>
+          </div>
+        </q-card-section>
+
+        <q-card-section class="q-pt-md">
+          <p class="text-body2 text-grey-9 q-mb-sm">
+            Ya hay una sesión iniciada con esta cuenta en otro dispositivo.
+          </p>
+          <p class="text-caption text-grey-7 q-mb-none">
+            ¿Deseas entrar y cerrar la sesión en el otro dispositivo, o cancelar para mantenerla?
+          </p>
+        </q-card-section>
+
+        <q-card-actions align="right" class="q-pt-none q-pb-sm q-gutter-sm">
+          <q-btn
+            flat
+            label="Cancelar"
+            color="grey-7"
+            :disable="loading"
+            @click="onCancelSessionDialog"
+          />
+          <q-btn
+            unelevated
+            label="Entrar"
+            icon="login"
+            color="primary"
+            :loading="loading"
+            @click="onConfirmForceLogin"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -66,20 +106,25 @@ const password = ref('');
 const loading = ref(false);
 const errorMsg = ref('');
 const canForceLogout = ref(false);
+const showSessionDialog = ref(false);
 
 const authStore = useAuthStore();
 const router = useRouter();
 const route = useRoute();
 
 async function onSubmit(forceLogout = false) {
+  const isForce = forceLogout === true;
   loading.value = true;
   errorMsg.value = '';
-  canForceLogout.value = false;
+  if (!isForce) {
+    canForceLogout.value = false;
+  }
+
   try {
     const res = await authStore.login({
       email: email.value,
       password: password.value,
-      forceLogoutOthers: forceLogout,
+      forceLogoutOthers: isForce,
     });
 
     const prefs = res?.user?.strategyPreferences || authStore.strategyPreferences;
@@ -105,15 +150,24 @@ async function onSubmit(forceLogout = false) {
     const errData = e.response?.data;
     if (e.response?.status === 409 || errData?.error === 'ACTIVE_SESSION_EXISTS') {
       canForceLogout.value = true;
+      showSessionDialog.value = true;
+      errorMsg.value = errData?.message || 'Ya hay una sesión iniciada en otro dispositivo.';
+    } else {
+      errorMsg.value =
+        errData?.message || 'No se pudo iniciar sesión. Verifica tus datos.';
     }
-    errorMsg.value =
-      errData?.message || 'No se pudo iniciar sesión. Verifica tus datos.';
   } finally {
     loading.value = false;
   }
 }
 
-function onForceLogin() {
-  onSubmit(true);
+function onCancelSessionDialog() {
+  showSessionDialog.value = false;
+  loading.value = false;
+}
+
+async function onConfirmForceLogin() {
+  showSessionDialog.value = false;
+  await onSubmit(true);
 }
 </script>
