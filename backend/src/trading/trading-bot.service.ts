@@ -2499,10 +2499,10 @@ export class TradingBotService implements OnModuleInit {
       let lot = (params as any).lot || this.getDefaultLotForSymbol(params.symbol);
       const maxLossUsd = this.getMaxSlUsd(params.symbol);
 
-      // Usar precio real de tick más reciente si está disponible para evitar desfases con velas antiguas
-      const livePrice = this.lastTickPrice.get(params.symbol);
-      if (livePrice && livePrice > 0) {
-        params.entryPrice = livePrice;
+      // Re-sincronizar precio de tick más reciente si hubo cambio durante las consultas asíncronas
+      const latestTickPrice = this.lastTickPrice.get(params.symbol);
+      if (latestTickPrice && latestTickPrice > 0) {
+        params.entryPrice = latestTickPrice;
       }
 
       // ── ALINEAR SL TÉCNICO CON EL SL MONETARIO ──
