@@ -2008,7 +2008,7 @@ export class TradingBotService implements OnModuleInit {
     const sym = params.symbol.toUpperCase();
     const strategy = params.isBacktesting ? 'WATCHED_LEVEL_BT' : 'WATCHED_LEVEL';
     const tag = params.isBacktesting ? 'BACKTESTING' : 'REAL';
-    this.logger.log(`🎯 [PUNTO VIGILADO TOCADO - ${tag}] ${sym} (${params.direction}) @ ${params.entryPrice || 'precio actual'}. Enviando a MT5...`);
+    this.logger.log(`🎯 [GAP / PUNTO VIGILADO (2 MIN ANTES) - ${tag}] ${sym} (${params.direction}) @ ${params.entryPrice || 'precio actual'}. Enviando a MT5...`);
     return this.openTrade({
       strategy,
       backtesting: params.isBacktesting,
@@ -2017,6 +2017,8 @@ export class TradingBotService implements OnModuleInit {
       direction: params.direction,
       entryPrice: params.entryPrice || 0,
       lot: params.lot,
+      isHighlyViable: true,
+      scorePct: 95,
     });
   }
 
@@ -2078,11 +2080,13 @@ export class TradingBotService implements OnModuleInit {
     const strategyName: string = params.strategy;
     const isSMC = strategyName === 'SMC_SYNTHETICS';
     const isManual = strategyName === 'MANUAL_APP';
+    const isWatchedGapTrade = strategyName === 'WATCHED_LEVEL' || strategyName === 'WATCHED_LEVEL_BT';
     const isCrashBoomStrategy =
       strategyName === 'CRASH_BOOM_IA' ||
       strategyName === 'SPIKE_RADAR' ||
       strategyName === 'EA_WEY_SMC' ||
-      strategyName === 'DOUBLE_WICK_MECHA';
+      strategyName === 'DOUBLE_WICK_MECHA' ||
+      isWatchedGapTrade;
     const isAllowedCbSymbol = this.isAllowedCrashBoomSymbol(params.symbol);
 
     // ── REGLA USUARIO: SOLO CRASH Y BOOM (TODO LO DEMÁS RESTRINGIDO) ──
@@ -2186,7 +2190,7 @@ export class TradingBotService implements OnModuleInit {
       }
     }
 
-    // ── CANDADO DE UNICIDAD POR SÍMBOLO: MÁXIMO 1 OPERACIÓN SIMULTÁNEA POR ÍNDICE ──
+    // ── CANDADO DE UNICIDAD POR SÍMBOLO: MÁXIMO 1 OPERACIÓN SIMULTÁNEA POR ÍNDICE (PERMITE 2DA ENTRADA SI ES POR GAP) ──
     const normSym = this.normalizeSymbol(params.symbol);
     if (params.strategy !== 'MANUAL_APP') {
       if (this.openingSymbolsInFlight.has(normSym)) {
@@ -2194,20 +2198,36 @@ export class TradingBotService implements OnModuleInit {
         return null;
       }
 
-      const hasOpenInApp = Array.from(this.activeTradesMap.values()).some(
+      const openTradesForSym = Array.from(this.activeTradesMap.values()).filter(
         (t) => t.status === 'OPEN' && this.isSameSymbol(t.symbol, params.symbol),
       );
-      if (hasOpenInApp) {
-        this.logger.warn(`⛔ [BLOQUEO MULTI-TRADE] Ya existe una orden activa en la app para ${params.symbol}. No se permite orden simultánea.`);
+      const hasGapTradeOpen = openTradesForSym.some(
+        (t) => t.strategy === 'WATCHED_LEVEL' || t.strategy === 'WATCHED_LEVEL_BT',
+      );
+      // Si la nueva entrada es por Gap (WATCHED_LEVEL) o ya había una de Gap abierta, se permite una 2da entrada en ese índice
+      const maxPerSymbol = isWatchedGapTrade || hasGapTradeOpen ? 2 : 1;
+
+      if (openTradesForSym.length >= maxPerSymbol) {
+        this.logger.warn(
+          `⛔ [BLOQUEO MULTI-TRADE] Ya existen ${openTradesForSym.length}/${maxPerSymbol} órdenes activas en la app para ${params.symbol}. No se permite otra orden simultánea.`,
+        );
         return null;
       }
 
-      const hasOpenInMt5 = (this.mt5Positions || []).some(
+      const openMt5ForSym = (this.mt5Positions || []).filter(
         (p) => this.isSameSymbol(p.symbol, params.symbol) && Number(p.magic) === 999888,
       );
-      if (hasOpenInMt5) {
-        this.logger.warn(`⛔ [BLOQUEO MULTI-TRADE MT5] Ya existe una posición abierta en MT5 para ${params.symbol}. No se permite orden simultánea.`);
+      if (openMt5ForSym.length >= maxPerSymbol) {
+        this.logger.warn(
+          `⛔ [BLOQUEO MULTI-TRADE MT5] Ya existen ${openMt5ForSym.length}/${maxPerSymbol} posiciones abiertas en MT5 para ${params.symbol}. No se permite otra orden simultánea.`,
+        );
         return null;
+      }
+
+      if (openTradesForSym.length === 1 || openMt5ForSym.length === 1) {
+        this.logger.log(
+          `🎯 [2DA ENTRADA PERMITIDA EN ÍNDICE] ${params.symbol} (${params.strategy}): Ya existe 1 operación activa en este índice y se autoriza la 2da entrada por confluencia de Gap.`,
+        );
       }
     }
 
@@ -2266,8 +2286,8 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── REGLA USUARIO 1: NO HACER TRADE INMEDIATAMENTE TRAS UN SPIKE (ESPERAR AL MENOS AL 50% DE RETROCESO) ──
-      // Si es una re-entrada porque el índice YA regresó a la zona dentro de la misma hora, permitir la entrada directamente.
-      if (this.getAssetCategory(params.symbol) === 'CRASH_BOOM' && !isSameHourZoneReentry) {
+      // Si es una re-entrada en la misma hora o una entrada de Gap (que ya validó tendencia M15 + retroceso M1 + 2 min antes), permitir directamente.
+      if (this.getAssetCategory(params.symbol) === 'CRASH_BOOM' && !isSameHourZoneReentry && !isWatchedGapTrade) {
         const isBoom = (params.symbol || '').toUpperCase().includes('BOOM');
         const currentPrice = Number(params.entryPrice) || this.lastTickPrice.get(params.symbol) || 0;
         let spike = this.lastSpikeDetails.get(params.symbol);
@@ -2331,14 +2351,15 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // ── FILTRO DE TENDENCIA MACRO (EMA 20 en M15): NO OPERAR CONTRA LA TENDENCIA ──
-      // Aplica a estrategias de Crash/Boom tradicionales; las señales del Dashboard (SPIKE_RADAR, EA_WEY_SMC, SMC_SYNTHETICS, DASHBOARD_STARS)
+      // Aplica a estrategias de Crash/Boom tradicionales; las señales del Dashboard (SPIKE_RADAR, EA_WEY_SMC, SMC_SYNTHETICS, DASHBOARD_STARS, WATCHED_LEVEL)
       // ya validan su propia estructura institucional multi-timeframe.
       const isDashboardValidatedStrategy =
         params.strategy === 'CRASH_BOOM_IA' ||
         params.strategy === 'SPIKE_RADAR' ||
         params.strategy === 'EA_WEY_SMC' ||
         params.strategy === 'SMC_SYNTHETICS' ||
-        params.strategy === 'DASHBOARD_STARS';
+        params.strategy === 'DASHBOARD_STARS' ||
+        isWatchedGapTrade;
       if (
         params.strategy !== 'MANUAL_APP' &&
         params.strategy !== 'H1_NO_WICK' &&
