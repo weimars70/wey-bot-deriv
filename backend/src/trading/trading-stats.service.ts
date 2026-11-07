@@ -543,43 +543,32 @@ export class TradingStatsService {
    * bloquea la entrada para proteger el capital.
    */
   async canTradeAdaptive(symbol: string, strategy: string): Promise<{ allowed: boolean; reason?: string }> {
-    // Las estrategias H1_NO_WICK y DOUBLE_WICK_MECHA operan INMEDIATAMENTE sin bloqueos por filtros de sesión/hora
-    if (!this.adaptiveEnabled || strategy === 'H1_NO_WICK' || strategy === 'DOUBLE_WICK_MECHA') {
+    // Las estrategias H1_NO_WICK, DOUBLE_WICK_MECHA y WATCHED_LEVEL (Gaps 2 min antes) operan directamente
+    if (
+      !this.adaptiveEnabled ||
+      strategy === 'H1_NO_WICK' ||
+      strategy === 'DOUBLE_WICK_MECHA' ||
+      strategy === 'WATCHED_LEVEL' ||
+      strategy === 'WATCHED_LEVEL_BT'
+    ) {
       return { allowed: true };
     }
 
     const currentHour = new Date().getHours();
     const symUp = (symbol || '').toUpperCase();
 
-    // 0. Bloqueo horario aprendido dinámicamente por el Agente IA (ej. Hora 22:00 del backtest o franjas con racha negativa)
+    // 0. Bloqueo horario controlado dinámicamente por el Agente IA (ej. Hora 22:00 del backtest o franjas ajustadas por el Agente)
     if (this.blockedHoursSet.has(currentHour)) {
-      const msg = `⛔ [FILTRO HORARIO AGENTE IA] ${symUp}: La franja ${currentHour}:00 - ${currentHour}:59 está restringida por baja efectividad histórica/horario. Entrada bloqueada.`;
+      const msg = `⛔ [FILTRO HORARIO AGENTE IA] ${symUp}: La franja ${currentHour}:00 - ${currentHour}:59 está restringida por el Agente IA. Entrada bloqueada.`;
       this.logger.warn(msg);
       return { allowed: false, reason: msg };
     }
 
-    // 1. Verificar Circuit Breaker por rachas perdedoras en este símbolo
+    // 1. Verificar Circuit Breaker por rachas perdedoras recientes en este símbolo
     const cb = await this.checkSymbolCircuitBreaker(symUp);
     if (cb.active) {
       const minutesLeft = Math.ceil(((cb.until || Date.now()) - Date.now()) / 60000);
       const msg = `⛔ [CIRCUIT BREAKER ACTIVO] ${symUp} lleva ${cb.consecutiveLosses} pérdidas seguidas. Pausa preventiva de protección por ${minutesLeft} min más.`;
-      this.logger.warn(msg);
-      return { allowed: false, reason: msg };
-    }
-
-    // 2. Verificar desempeño por Franja Horaria aprendida para este símbolo
-    const hourPerf = await this.getHistoricalHourPerformance(symUp, currentHour);
-    if (hourPerf.total >= this.minSamplesForHourFilter && hourPerf.winRatePct < this.minWinRateThreshold) {
-      const msg = `⛔ [FILTRO HORARIO ADAPTATIVO] ${symUp}: La hora ${currentHour}:00 tiene bajo acierto histórico (${hourPerf.winRatePct.toFixed(0)}% en ${hourPerf.total} operaciones). Evitando entrada en ciclo desfavorable.`;
-      this.logger.warn(msg);
-      return { allowed: false, reason: msg };
-    }
-
-    // 3. Verificar desempeño por Sesión completa si hay suficiente historial
-    const currentSession = this.getSessionFromHour(currentHour);
-    const sessionPerf = await this.getHistoricalSessionPerformance(symUp, currentSession);
-    if (sessionPerf.total >= 5 && sessionPerf.winRatePct < 30.0) {
-      const msg = `⛔ [FILTRO SESIÓN ADAPTATIVO] ${symUp}: La sesión ${currentSession} tiene winrate crítico (${sessionPerf.winRatePct.toFixed(0)}%). Bloqueando nuevas entradas en esta sesión.`;
       this.logger.warn(msg);
       return { allowed: false, reason: msg };
     }
