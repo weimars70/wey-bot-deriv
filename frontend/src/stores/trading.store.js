@@ -65,9 +65,12 @@ export const useTradingStore = defineStore('trading', {
             }
             this.hasInitialLoad = true;
           } else {
-            // Detectar trades NUEVOS recién ejecutados por el bot
+            // Detectar trades NUEVOS recién ejecutados y confirmados en MT5 (con mt5Ticket)
             for (const t of list) {
-              if (!this.knownTradeIds.has(t.id)) {
+              if (!t.mt5Ticket) continue;
+              const uniqueKey = String(t.mt5Ticket || t.id);
+              if (!this.knownTradeIds.has(uniqueKey) && !this.knownTradeIds.has(t.id)) {
+                this.knownTradeIds.add(uniqueKey);
                 this.knownTradeIds.add(t.id);
                 this.executedTradesLog.unshift({
                   ...t,

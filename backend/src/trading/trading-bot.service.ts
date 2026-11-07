@@ -28,9 +28,9 @@ export class TradingBotService implements OnModuleInit {
   private m5PlusAutoEnabled = false; // M5++ auto-trading (desactivado)
   private m5XAutoEnabled = false;
   private smcProAutoEnabled = true;  // Estrategia SMC Pro activa
-  private maxOpenTrades = 4;
-  private maxOpenSymbols = 4;
-  private maxCrashBoomTrades = 4; // Máximo 4 concurrentes entre Crash y Boom
+  private maxOpenTrades = 3;
+  private maxOpenSymbols = 3;
+  private maxCrashBoomTrades = 3; // Máximo 3 concurrentes entre Crash y Boom
   private maxXauusdTrades = 0;    // 0 concurrentes para XAUUSD (Oro bloqueado)
   private maxOtherTrades = 0;     // 0 concurrentes para Forex y otros sintéticos (restringidos por usuario)
   private maxTradesPerSymbol = 1; // Máximo 1 entrada de la app por índice (trades manuales no cuentan)
@@ -577,9 +577,9 @@ export class TradingBotService implements OnModuleInit {
   }
 
   getActiveTrades(): TradeRecord[] {
-    return Array.from(this.activeTradesMap.values()).sort(
-      (a, b) => Number(b.entryTime) - Number(a.entryTime),
-    );
+    return Array.from(this.activeTradesMap.values())
+      .filter((t) => t.status === 'OPEN' && Boolean(t.mt5Ticket))
+      .sort((a, b) => Number(b.entryTime) - Number(a.entryTime));
   }
 
   async getTradeHistory(limit = 50): Promise<TradeRecord[]> {
@@ -2811,6 +2811,13 @@ export class TradingBotService implements OnModuleInit {
         const rejectedTrade = this.activeTradesMap.get(fb.tradeId);
         if (rejectedTrade && !rejectedTrade.mt5Ticket) {
           this.activeTradesMap.delete(fb.tradeId);
+          // Evitar reintentos en bucle cada 2.5s cuando MT5 rechaza una orden
+          const rejSym = rejectedTrade.symbol;
+          if (rejSym) {
+            this.lastTradeOpenedAt.set(`${rejSym}_CRASH_BOOM`, Date.now());
+            this.lastTradeOpenedAt.set(`${rejSym}_${rejectedTrade.strategy}`, Date.now());
+            this.lastSymbolTradeOpenedAt.set(rejSym, Date.now());
+          }
           await this.tradeRepo
             .update(fb.tradeId, {
               status: 'CLOSED',
